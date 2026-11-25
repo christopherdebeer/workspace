@@ -45,7 +45,7 @@ export class Renderer {
     this.gl = gl;
     this.main = program(gl, MAIN_VS, MAIN_FS);
     this.shade = program(gl, SHADOW_VS, SHADOW_FS);
-    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips']) this.u[k] = gl.getUniformLocation(this.main, k);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB']) this.u[k] = gl.getUniformLocation(this.main, k);
     this.us.lvp = gl.getUniformLocation(this.shade, 'lvp');
     const room = buildSalle();
     this.roomN = room.n;
@@ -116,6 +116,8 @@ export class Renderer {
     const tips: number[] = [];
     for (const f of bout.fencers) { const t = f.blade.tip; tips.push(t[0], t[1], t[2], 1); }
     gl.uniform4fv(this.u.tips, tips);
+    gl.uniform3fv(this.u.bladeA, [...bout.fencers[0].blade.guard, ...bout.fencers[1].blade.guard]);
+    gl.uniform3fv(this.u.bladeB, [...bout.fencers[0].blade.tip, ...bout.fencers[1].blade.tip]);
     gl.bindVertexArray(this.roomVao);
     gl.drawArrays(gl.TRIANGLES, 0, this.roomN);
     gl.bindVertexArray(this.dynVao);

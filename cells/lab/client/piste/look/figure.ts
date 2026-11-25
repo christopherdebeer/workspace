@@ -17,7 +17,7 @@ import { type V, add, cross, dot, len, lerp, madd, norm, scale, sub } from '../v
 
 const KIT = {
   jacket: [0.64, 0.63, 0.6] as C, knickers: [0.6, 0.59, 0.57] as C, sock: [0.66, 0.66, 0.64] as C,
-  glove: [0.4, 0.37, 0.33] as C, seam: [0.26, 0.24, 0.22] as C, skin: [0.55, 0.36, 0.27] as C,
+  glove: [0.5, 0.47, 0.42] as C, seam: [0.26, 0.24, 0.22] as C, skin: [0.55, 0.36, 0.27] as C,
   shoe: [0.78, 0.78, 0.76] as C, sole: [0.035, 0.035, 0.04] as C, band: [0.06, 0.07, 0.1] as C,
   mesh: [0.11, 0.11, 0.115] as C, bib: [0.6, 0.59, 0.56] as C, trim: [0.5, 0.49, 0.47] as C,
   grip: [0.06, 0.055, 0.05] as C, steel: [0.86, 0.87, 0.9] as C, bell: [0.78, 0.78, 0.8] as C, pad: [0.1, 0.09, 0.09] as C,
@@ -25,7 +25,7 @@ const KIT = {
 };
 
 /** cloth's planes: a little lighter or darker face by face, as paint lays them */
-const facet = (seed: number) => (i: number, j: number) => 0.92 + 0.16 * hash3(seed, i * 7 + 1, j * 13 + 5);
+const facet = (seed: number) => (i: number, j: number) => 0.965 + 0.07 * hash3(seed, i * 7 + 1, j * 13 + 5);
 
 export function dressFencer(m: Mesh, f: Fencer, self: boolean, seed: number) {
   const c = f.capsules, F = f.frame, up: V = [0, 1, 0];
@@ -35,41 +35,54 @@ export function dressFencer(m: Mesh, f: Fencer, self: boolean, seed: number) {
   }
   // the weapon arm: sleeve to the wrist, the glove over it
   const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.045);
-  limb(m, [f.shoulder, f.elbow, wrist], [0.066, 0.054, 0.045], KIT.jacket, seed + 11, F.u);
+  // (looking out of this one: the sleeve from partway down the upper arm, which is all of it the eye can see)
+  const top = self ? lerp(f.shoulder, f.elbow, 0.5) : madd(f.shoulder, norm(sub(f.shoulder, f.elbow)), 0.03);
+  limb(m, [top, f.elbow, wrist], [self ? 0.078 : 0.09, 0.07, 0.05], KIT.jacket, seed + 11, F.u, [1]);
   glove(m, f, wrist, seed);
   // the rear arm, and its bare hand
   if (!self) {
     const rs = c[3].b, re = c[7].b, rh = c[8].b;
-    limb(m, [rs, re, rh], [0.06, 0.05, 0.04], KIT.jacket, seed + 23, F.u);
-    m.ellipsoid(madd(rh, norm(sub(rh, re)), 0.04), scale(norm(sub(rh, re)), 0.05), [0, 0.03, 0], scale(F.r, 0.02), 8, 5, () => [KIT.skin, MAT.skin]);
+    limb(m, [rs, re, rh], [0.082, 0.064, 0.046], KIT.jacket, seed + 23, F.u, [1]);
+    // the bare rear hand, relaxed: a palm, the fingers curled a little, a thumb
+    const hd = norm(sub(rh, re)), [hu, hw] = around(hd, F.r);
+    m.ellipsoid(madd(rh, hd, 0.045), scale(hd, 0.05), scale(hu, 0.022), scale(hw, 0.04), 10, 6, () => [KIT.skin, MAT.skin]);
+    m.ellipsoid(madd(madd(rh, hd, 0.1), hu, -0.006), scale(hd, 0.035), scale(hu, 0.018), scale(hw, 0.036), 8, 5, () => [KIT.skin, MAT.skin]);
+    m.ellipsoid(madd(madd(rh, hd, 0.05), hw, 0.04), scale(hd, 0.03), scale(hu, 0.013), scale(hw, 0.013), 6, 4, () => [KIT.skin, MAT.skin]);
   }
   // legs: knickers to below the knee, a band, long socks; then the shoes
   for (const [th, sh, ft] of [[c[9], c[10], c[13]], [c[11], c[12], c[14]]] as const) {
     const hip = th.a, knee = th.b, ankle = madd(sh.b, up, 0.035);
     const below = lerp(knee, ankle, 0.14);
-    limb(m, [madd(hip, up, 0.04), lerp(hip, knee, 0.5), knee, below], [0.1, 0.088, 0.068, 0.062], KIT.knickers, seed + 31, F.f);
-    limb(m, [lerp(knee, ankle, 0.12), below], [0.066, 0.066], [KIT.knickers[0] * 0.9, KIT.knickers[1] * 0.9, KIT.knickers[2] * 0.9], seed + 37, F.f);
-    limb(m, [below, lerp(below, ankle, 0.5), ankle], [0.06, 0.054, 0.042], KIT.sock, seed + 41, F.f);
+    // knickers full to below the knee, a band; socks with the calf under them
+    limb(m, [madd(hip, up, 0.06), lerp(hip, knee, 0.45), knee, below], [0.13, 0.12, 0.092, 0.08], KIT.knickers, seed + 31, F.f, [2]);
+    limb(m, [lerp(knee, ankle, 0.1), lerp(knee, ankle, 0.17)], [0.078, 0.076], [KIT.knickers[0] * 0.92, KIT.knickers[1] * 0.92, KIT.knickers[2] * 0.92], seed + 37, F.f);
+    limb(m, [lerp(knee, ankle, 0.15), lerp(knee, ankle, 0.42), lerp(knee, ankle, 0.8), ankle], [0.066, 0.068, 0.05, 0.044], KIT.sock, seed + 41, F.f);
     shoe(m, ft.a, ft.b);
   }
   weapon(m, f, seed);
 }
 
 /** a limb through joints: faceted rings, the faces lit plane by plane */
-function limb(m: Mesh, pts0: V[], radii0: number[], col: C, seed: number, hint: V) {
-  // (a ring between each pair of joints as well, a little fuller: the muscle under the cloth)
+function limb(m: Mesh, pts0: V[], radii0: number[], col: C, seed: number, hint: V, creaseAt: number[] = []) {
+  // (between joints a fuller ring (the cloth over the muscle); at a bending joint a crease: a pinched ring between two
+  // full ones, which the soft normals turn into a fold line, as the painted study draws an elbow)
   const pts: V[] = [], radii: number[] = [];
   for (let i = 0; i < pts0.length; i++) {
-    pts.push(pts0[i]); radii.push(radii0[i]);
-    if (i < pts0.length - 1) { pts.push(lerp(pts0[i], pts0[i + 1], 0.45)); radii.push((radii0[i] + radii0[i + 1]) / 2 * 1.06); }
+    if (creaseAt.includes(i) && i > 0 && i < pts0.length - 1) {
+      const a = norm(sub(pts0[i - 1], pts0[i])), b = norm(sub(pts0[i + 1], pts0[i]));
+      pts.push(madd(pts0[i], a, 0.035)); radii.push(radii0[i] * 1.04);
+      pts.push(pts0[i]); radii.push(radii0[i] * 0.88);
+      pts.push(madd(pts0[i], b, 0.035)); radii.push(radii0[i] * 1.03);
+    } else { pts.push(pts0[i]); radii.push(radii0[i]); }
+    if (i < pts0.length - 1) { pts.push(lerp(pts0[i], pts0[i + 1], 0.5)); radii.push((radii0[i] + radii0[i + 1]) / 2 * 1.05); }
   }
   const rings: { c: V; u: V; w: V; ru: number; rw: number }[] = [];
   for (let i = 0; i < pts.length; i++) {
     const d = norm(sub(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]));
     const [u, w] = around(d, hint);
-    rings.push({ c: pts[i], u, w, ru: radii[i], rw: radii[i] * 0.9 });
+    rings.push({ c: pts[i], u, w, ru: radii[i], rw: radii[i] * 0.93 });
   }
-  m.tube(rings, 10, col, MAT.cloth, { jit: 0.1, seed, capA: true, capB: true, shade: facet(seed), soft: 0.55 });
+  m.tube(rings, 12, col, MAT.cloth, { jit: 0.07, seed, capA: true, capB: true, shade: facet(seed), soft: 0.88 });
 }
 
 /** the torso, side on: an elliptical body, wide along the shoulder line (down the piste), narrow across */
@@ -83,19 +96,19 @@ function torso(m: Mesh, f: Fencer, seed: number) {
   const u = at(0, F.f), w = norm(cross(spine, u));
   const ring = (p: V, ru: number, rw: number, du = 0) => ({ c: madd(p, u, du), u, w, ru, rw });
   const rings = [
-    ring(madd(pelvis, spine, -0.1), 0.165, 0.13),
-    ring(madd(pelvis, spine, -0.04), 0.185, 0.142),            // the jacket's hem
-    ring(madd(pelvis, spine, -0.03), 0.175, 0.134),
-    ring(lerp(pelvis, chest, 0.35), 0.168, 0.125),
-    ring(lerp(pelvis, chest, 0.6), 0.185, 0.132, 0.008),
-    ring(lerp(pelvis, chest, 0.85), 0.2, 0.136, 0.012),
-    ring(lerp(chest, neck, 0.45), 0.205, 0.12, 0.02),          // the shoulders
-    ring(lerp(chest, neck, 0.85), 0.08, 0.07, 0.02),
-    ring(madd(neck, spine, 0.02), 0.07, 0.066, 0.02),          // the collar
+    ring(madd(pelvis, spine, -0.12), 0.18, 0.16),
+    ring(madd(pelvis, spine, -0.05), 0.205, 0.18),             // the jacket's hem, loose over the knickers
+    ring(madd(pelvis, spine, -0.035), 0.195, 0.172),
+    ring(lerp(pelvis, chest, 0.3), 0.19, 0.168),
+    ring(lerp(pelvis, chest, 0.6), 0.205, 0.18, 0.008),
+    ring(lerp(pelvis, chest, 0.88), 0.225, 0.185, 0.012),
+    ring(lerp(chest, neck, 0.42), 0.23, 0.17, 0.02),           // the shoulders
+    ring(lerp(chest, neck, 0.8), 0.12, 0.1, 0.02),
+    ring(madd(neck, spine, 0.025), 0.075, 0.07, 0.02),         // the collar
   ];
-  m.tube(rings, 12, KIT.jacket, MAT.cloth, { jit: 0.06, seed: seed + 3, capA: true, capB: true, shade: facet(seed + 3), soft: 0.5 });
+  m.tube(rings, 14, KIT.jacket, MAT.cloth, { jit: 0.05, seed: seed + 3, capA: true, capB: true, shade: facet(seed + 3), soft: 0.85 });
   // the front shoulder's cap, where the sleeve meets the jacket
-  m.ellipsoid(f.shoulder, scale(u, 0.07), scale(spine, 0.06), scale(w, 0.065), 8, 5, () => [KIT.jacket, MAT.cloth]);
+  m.ellipsoid(f.shoulder, scale(u, 0.1), scale(spine, 0.085), scale(w, 0.095), 10, 6, () => [KIT.jacket, MAT.cloth]);
 }
 
 /** the mask: a dark mesh front, the white bib under it, a white trim round the back */
@@ -113,18 +126,23 @@ function mask(m: Mesh, f: Fencer) {
   m.quad(sub(top, sx), add(top, sx), add(madd(top, fwd, -0.07), scale(sx, 1.1)), sub(madd(top, fwd, -0.07), scale(sx, 1.1)), KIT.bib, MAT.cloth);
 }
 
-/** a shoe from heel to toe: a white upper with two dark bands, a dark sole proud of it */
+/** a shoe from heel to toe: a rounded white upper over a dark sole, a little toe spring, two plain bands each side */
 function shoe(m: Mesh, heel: V, toe: V) {
-  const along = sub(toe, heel), L = len(along), d = norm([along[0], 0, along[2]]), side = norm(cross([0, 1, 0], d)), up: V = [0, 1, 0];
-  const base = heel[1] - 0.038, mid = lerp(heel, toe, 0.5);
-  const ctr: V = [mid[0], base + 0.04, mid[2]];
-  m.obox(ctr, scale(d, L / 2 + 0.02), scale(up, 0.032), scale(side, 0.046), KIT.shoe, MAT.cloth);
-  m.obox([mid[0], base + 0.006, mid[2]], scale(d, L / 2 + 0.03), scale(up, 0.008), scale(side, 0.05), KIT.sole, MAT.rubber);
-  // (the toe rounded off: a smaller box ahead, a little lower)
-  m.obox(add(madd(ctr, d, L / 2 + 0.02), [0, -0.01, 0]), scale(d, 0.025), scale(up, 0.022), scale(side, 0.042), KIT.shoe, MAT.cloth);
-  for (const s of [-1, 1]) for (const k of [-0.05, 0.02]) {
-    const o = add(madd(ctr, side, s * 0.0475), scale(d, k)), a = madd(o, up, -0.022), b = madd(o, up, 0.026);
-    m.quad(madd(a, d, -0.012), madd(a, d, 0.012), madd(b, d, 0.03), madd(b, d, 0.006), KIT.band, MAT.rubber);
+  const along = sub(toe, heel), L = len(along) + 0.05, d = norm([along[0], 0, along[2]]), side = norm(cross([0, 1, 0], d)), up: V = [0, 1, 0];
+  const base = heel[1] - 0.038, h0: V = [heel[0], base, heel[2]], back = madd(h0, d, -0.035);
+  // rings along the foot: where, half-width, height of the upper's top, how high the ring's middle sits
+  const prof: [number, number, number][] = [[0, 0.036, 0.07], [0.12, 0.044, 0.085], [0.38, 0.048, 0.07], [0.68, 0.049, 0.052], [0.88, 0.042, 0.04], [1, 0.024, 0.028]];
+  const rings = prof.map(([s, w, ht]) => {
+    const c = madd(madd(back, d, s * L), up, 0.016 + ht / 2 + (s > 0.85 ? (s - 0.85) * 0.06 : 0));
+    return { c, u: up, w: side, ru: ht / 2, rw: w };
+  });
+  m.tube(rings, 12, KIT.shoe, MAT.cloth, { capA: true, capB: true, soft: 0.85 });
+  // the sole: dark, proud of the upper, thicker at the heel
+  m.obox(madd(madd(back, d, L * 0.5), up, 0.009), scale(d, L * 0.52), scale(up, 0.009), scale(side, 0.053), KIT.sole, MAT.rubber);
+  m.obox(madd(madd(back, d, L * 0.17), up, 0.02), scale(d, L * 0.17), scale(up, 0.008), scale(side, 0.05), KIT.sole, MAT.rubber);
+  for (const sg of [-1, 1]) for (const k of [0.42, 0.56]) {
+    const o = madd(madd(madd(back, d, k * L), side, sg * 0.0495), up, 0.02);
+    m.quad(madd(o, d, -0.01), madd(o, d, 0.01), madd(madd(o, d, 0.035), up, 0.045), madd(madd(o, d, 0.015), up, 0.045), KIT.band, MAT.rubber);
   }
 }
 
@@ -134,16 +152,18 @@ function glove(m: Mesh, f: Fencer, wrist: V, seed: number) {
   const b = f.blade, ax = b.handAxis, thumb = perp(b.thumb, ax), side = cross(ax, thumb);
   const fa = norm(sub(wrist, f.elbow));
   const [u, w] = around(fa, thumb);
-  const g0 = madd(wrist, fa, -0.075), g1 = madd(wrist, fa, 0.01);
-  m.tube([{ c: g0, u, w, ru: 0.052, rw: 0.05 }, { c: lerp(g0, g1, 0.5), u, w, ru: 0.05, rw: 0.047 }, { c: g1, u, w, ru: 0.043, rw: 0.041 }], 10, KIT.glove, MAT.glove, { jit: 0.06, seed: seed + 51, capA: true, shade: facet(seed + 51) });
-  // the fist: round the grip just behind the guard, its knuckles toward the side away from the thumb
-  const fist = madd(b.guard, ax, -0.055);
-  m.ellipsoid(madd(fist, side, -0.004), scale(ax, 0.045), scale(thumb, 0.036), scale(side, 0.04), 10, 6, () => [KIT.glove, MAT.glove]);
-  m.ellipsoid(madd(madd(fist, thumb, 0.028), ax, 0.014), scale(ax, 0.028), scale(thumb, 0.013), scale(side, 0.02), 8, 5, () => [KIT.glove, MAT.glove]);
-  // the seam: a dark stitch line from the cuff over the back of the hand, on the thumb's side
-  const s0 = madd(g0, u, 0.057), s1 = madd(g1, u, 0.048), s2 = madd(madd(fist, thumb, 0.039), ax, -0.03), s3 = madd(madd(fist, thumb, 0.039), ax, 0.035);
-  const seam = (a: V, c: V, wa: V) => m.quad(madd(a, wa, -0.0035), madd(a, wa, 0.0035), madd(c, wa, 0.0035), madd(c, wa, -0.0035), KIT.seam, MAT.rubber);
-  seam(s0, s1, w); seam(s2, s3, side);
+  // the gauntlet: a stiff cuff flaring over the sleeve's end
+  const g0 = madd(wrist, fa, -0.09), g1 = madd(wrist, fa, 0.015);
+  m.tube([{ c: madd(g0, fa, -0.01), u, w, ru: 0.06, rw: 0.058 }, { c: g0, u, w, ru: 0.064, rw: 0.062 }, { c: lerp(g0, g1, 0.55), u, w, ru: 0.054, rw: 0.051 }, { c: g1, u, w, ru: 0.04, rw: 0.038 }], 12, KIT.glove, MAT.glove, { soft: 0.8, capA: true });
+  // the fist round the grip, behind the bell: small (the fingers wrap the grip, the bell's pad in front of them)
+  const fist = madd(b.guard, ax, -0.06);
+  m.ellipsoid(madd(fist, side, -0.006), scale(ax, 0.042), scale(thumb, 0.028), scale(side, 0.032), 10, 6, () => [KIT.glove, MAT.glove]);
+  m.ellipsoid(madd(madd(fist, thumb, 0.022), ax, 0.018), scale(ax, 0.026), scale(thumb, 0.011), scale(side, 0.015), 8, 5, () => [KIT.glove, MAT.glove]);
+  // the seam: a dark stitched line down the back of the cuff and over the back of the hand, on the thumb's side: it
+  // turns as the hand rolls
+  const seam = (pts: V[], wa: V, r = 0.0042) => { for (let i = 0; i < pts.length - 1; i++) m.quad(madd(pts[i], wa, -r), madd(pts[i], wa, r), madd(pts[i + 1], wa, r), madd(pts[i + 1], wa, -r), KIT.seam, MAT.rubber); };
+  seam([madd(g0, u, 0.0655), madd(lerp(g0, g1, 0.55), u, 0.0555), madd(g1, u, 0.0415)], w);
+  seam([madd(madd(fist, thumb, 0.0295), ax, -0.04), madd(madd(fist, thumb, 0.0295), ax, 0.03)], side, 0.0035);
 }
 
 function perp(v: V, ax: V): V { return norm(sub(v, scale(ax, dot(v, ax)))); }
@@ -174,7 +194,7 @@ function weapon(m: Mesh, f: Fencer, seed: number) {
     m.stri(a.p, bb.p, c.p, a.n, bb.n, c.n, KIT.bell, MAT.bell);
     m.stri(a.p, c.p, d.p, a.n, c.n, d.n, KIT.bell, MAT.bell);
     // (inside: polished steel as well, hammered the same way; the dark pad only round the middle, where the hand is)
-    const ni = (q: V): V => scale(q, -1), padded = i < 3;
+    const ni = (q: V): V => scale(q, -1), padded = i < 6;
     const ic: C = padded ? KIT.pad : [KIT.bell[0] * 0.72, KIT.bell[1] * 0.72, KIT.bell[2] * 0.74], im = padded ? MAT.rubber : MAT.bell;
     m.stri(a.pin, c.pin, bb.pin, ni(a.n), ni(c.n), ni(bb.n), ic, im);
     m.stri(a.pin, d.pin, c.pin, ni(a.n), ni(d.n), ni(c.n), ic, im);
@@ -185,7 +205,7 @@ function weapon(m: Mesh, f: Fencer, seed: number) {
   for (let j = 0; j <= seg; j++) { const p = (j / seg) * Math.PI * 2; rim.push(add(rimC, add(scale(thumb, Math.cos(p) * rr), scale(side, Math.sin(p) * rr)))); }
   for (let j = 0; j < seg; j++) {
     const a = rim[j], c2 = rim[j + 1], oa = norm(sub(a, rimC)), oc = norm(sub(c2, rimC));
-    const a1 = madd(madd(a, oa, 0.0025), ax, -0.003), c1 = madd(madd(c2, oc, 0.0025), ax, -0.003);
+    const a1 = madd(madd(a, oa, 0.004), ax, -0.005), c1 = madd(madd(c2, oc, 0.004), ax, -0.005);
     m.stri(a, c2, c1, oa, oc, oc, KIT.bell, MAT.bell); m.stri(a, c1, a1, oa, oc, oa, KIT.bell, MAT.bell);
   }
   // the blade: a triangle in section, its flat (grooved) face on the thumb's side, its two other faces meeting in an
@@ -207,6 +227,6 @@ function weapon(m: Mesh, f: Fencer, seed: number) {
   };
   face('B', 'A'); face('A', 'Cc'); face('Cc', 'B');
   // the button: a barrel at the tip, darker, a bright ring where it seats
-  const tip = b.tip, td = b.tipAxis, [tu, tw] = around(td, thumb), rb = b.r[n - 1] * 1.55;
+  const tip = b.tip, td = b.tipAxis, [tu, tw] = around(td, thumb), rb = b.r[n - 1] * 2.1;
   m.tube([{ c: madd(tip, td, -0.014), u: tu, w: tw, ru: rb * 0.9, rw: rb * 0.9 }, { c: madd(tip, td, -0.011), u: tu, w: tw, ru: rb, rw: rb }, { c: madd(tip, td, 0.004), u: tu, w: tw, ru: rb * 0.95, rw: rb * 0.95 }], 8, KIT.button, MAT.button, { capB: true });
 }
