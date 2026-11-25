@@ -74,6 +74,8 @@ After every touch you see it again: the last second and a bit, from the side (fr
 
 ![A touch, from the side](piste/v-double.jpg)
 
+**The body the blades meet is the body you see.** Each fencer's collision body is a set of capsules posed with the figure, fitted to the dressed athlete by measurement (`devtools/piste-fit.mjs` poses and skins the athlete as the shader does and reports, capsule by capsule, where the cloth surface sits): the trunk an oval, wide along the piste and thin across it, side on; the mask, the arms in their sleeves and the thighs in their breeches as full as the kit. So a point lands where the cloth is, not in the air in front of it, and the bell's cover and the open targets are the ones you can see.
+
 **The arm tires.** An épée held out at shoulder height is heavy at the end of a long lever. Held straight, your arm tires within seconds: about nine to exhaustion. A tired arm has lost over half its strength, its point trembles at a tired muscle's eight to twelve beats a second, and it sags. Bend it and it recovers in about five. The bar at the bottom left shows yours. So holding a line is a choice with a cost.
 
 **The opponent sees you late.** It is a controller like your thumbs and gives the same kind of intent. It perceives the bout a reaction time (200 ms) ago. It keeps the distance it likes and attacks when it sees a chance: an extension, a lunge behind it, and an advance first if it's a little far. When your point comes at it, it parries to the side your blade is on and ripostes. It judges a threat by how fast your point and its body are closing, whoever is moving, so stepping onto a still point counts. And it watches its own point and corrects it, as a fencer does.

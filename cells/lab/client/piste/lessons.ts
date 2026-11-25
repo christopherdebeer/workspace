@@ -76,7 +76,7 @@ const mine = (c: Ctx) => c.lights[0]?.valid ? c.lights[0] : null;
 /** how high on the chest the coach's attacks come in the high-line parry lessons (above the middle: a high line), m */
 const PARRY_HIGH = 0.08;
 /** the distance the parry lessons start from: the coach's arm reaches you from here without a lunge, m */
-const PARRY_GAP = 1.0;
+const PARRY_GAP = 1.1;
 /** how fast the coach's arm goes out in the parry lessons (per second) */
 const PARRY_TEMPO = 2;
 /** the beat attack starts from here: their line just short of you, you a lunge from them, m */
@@ -87,13 +87,13 @@ const BEAT_GAP = 1.35;
  * long its parry takes across */
 /** second intention: from where, how soon it parries your lunge, its parry (hand across, wrist turn, how long), and its
  * riposte's tempo */
-const SECOND = { gap: 1.7, react: 0.08, hand: -0.28, turn: 0.25, time: 0.25, tempo: 2.2 };
+const SECOND = { gap: 1.72, react: 0.08, hand: -0.28, turn: 0.25, time: 0.25, tempo: 2.2 };
 const ONETWO = { retreat: true, gap: 1.6, believe: 0.35, react: 0.12, time: 0.3, hand: -0.28, turn: 0.25 };
 const DIS = { gap: 1.6, sweep: -0.28, sweepPoint: -0.1, time: 0.35 };
 /** sixte: where the coach's hand starts (across, to your outside) and how far outside the middle of your chest it aims, m */
-const SIXTE = { aim: 0.06, under: [0.12, -0.2] as [number, number], viaFor: 0.35, handAfter: -0.3 };
+const SIXTE = { gap: 1.05, aim: 0.06, under: [0.12, -0.2] as [number, number], viaFor: 0.35, handAfter: -0.3 };
 /** the low lines: where on the trunk (pelvis 0 .. chest 1) septime's attack goes, and how far down the thigh octave's */
-const LOW = { at: 0.32, thigh: 0.25, gap: 1.0, tempo: 1.1, outside: 0.09, hand0: -0.16, octaveGap: 1.0, point0: 0 };
+const LOW = { at: 0.32, thigh: 0.25, gap: 1.05, tempo: 1.1, outside: 0.09, hand0: -0.16, octaveGap: 1.05, point0: 0 };
 
 /**
  * A parry and its riposte, in one of the four lines. Each line says where the coach's point goes (`at`), where its hand
@@ -131,7 +131,7 @@ const LINES: Record<string, Line> = {
     // (round under your blade to the outside: the point dips under it and comes up on your right)
     at: (c) => add(add(c.student.shoulder, [0, -0.06, 0]), scale(c.student.frame.r, SIXTE.aim)), hand0: [0.04, 0],
     // (straight down off your blade first, then across under your hand, then up on your outside)
-    via: (c, u) => add(c.student.blade.guard, add(scale(c.student.frame.r, u < 0.45 ? -SIXTE.under[0] : SIXTE.under[0]), [0, SIXTE.under[1], 0])), viaFor: SIXTE.viaFor, handAfter: [SIXTE.handAfter, 0] },
+    via: (c, u) => add(c.student.blade.guard, add(scale(c.student.frame.r, u < 0.45 ? -SIXTE.under[0] : SIXTE.under[0]), [0, SIXTE.under[1], 0])), viaFor: SIXTE.viaFor, handAfter: [SIXTE.handAfter, 0], gap: SIXTE.gap },
   septime: { id: 'septime', name: 'septime', where: 'inside line (your left), low', side: -1, low: true, thumb: 'right thumb down and a little left',
     at: (c) => add(lerp(c.student.capsules[0].a, c.student.capsules[0].b, LOW.at), scale(c.student.frame.r, -0.03)), hand0: [0.02, -0.06], gap: LOW.gap, tempo: LOW.tempo,
     extra: 'In the low lines the point drops and sweeps: the hand stays about where it was, the blade swings down across the attack like a pendulum.' },

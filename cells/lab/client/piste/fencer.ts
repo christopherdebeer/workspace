@@ -25,6 +25,9 @@ export const BODY = {
   eye: 0.7,             // eye above the pelvis
 };
 
+/** the trunk's section, side on: half its depth across the piste, and how far its width runs past that fore and aft, m */
+export const TRUNK = { depth: 0.115, wide: 0.045 };
+
 /** how an arm tires: from what extension, seconds held straight to exhaustion, seconds bent to recover fully, how much
  * strength it costs at the end, how far the point trembles and the hand sags, m */
 export const FATIGUE = { from: 0.55, tire: 9, rest: 5, weak: 0.55, tremor: 0.018, droop: 0.05 };
@@ -152,21 +155,25 @@ export class Fencer {
     const rearElbow = toWorld(F, hipsFwd - 0.12 - 0.12 * L, hipsUp + 0.26 - 0.06 * L, -0.2);
     const rearHand = toWorld(F, hipsFwd - 0.04 - 0.4 * L, hipsUp + 0.03 + 0.02 * L, -0.24);
     this.capsules = [
-      { a: pelvis, b: chest, ra: 0.13, rb: 0.15, part: 'torso' },
+      // (the trunk is an oval, wide along the piste and thin across it, side on: this, the core, is as thin as it is
+      // across; two more at the end of the list widen it fore and aft. Fitted to the dressed figure: devtools/piste-fit.mjs)
+      { a: pelvis, b: chest, ra: TRUNK.depth, rb: TRUNK.depth, part: 'torso' },
       { a: chest, b: neck, ra: 0.14, rb: 0.07, part: 'torso' },
-      { a: madd(head, f, -0.01), b: madd(head, f, 0.02), ra: 0.115, rb: 0.115, part: 'head' },
+      { a: madd(head, f, -0.01), b: madd(head, f, 0.02), ra: 0.14, rb: 0.14, part: 'head' },
       { a: this.shoulder, b: rearShoulder, ra: 0.065, rb: 0.065, part: 'torso' },
-      { a: this.shoulder, b: this.elbow, ra: 0.05, rb: 0.042, part: 'arm' },
+      { a: this.shoulder, b: this.elbow, ra: 0.065, rb: 0.055, part: 'arm' },
       { a: this.elbow, b: this.hand, ra: 0.042, rb: 0.036, part: 'arm' },
       { a: this.hand, b: madd(this.hand, norm(sub(P, G)), 0.06), ra: 0.04, rb: 0.035, part: 'hand' },
-      { a: rearShoulder, b: rearElbow, ra: 0.045, rb: 0.04, part: 'arm' },
+      { a: rearShoulder, b: rearElbow, ra: 0.062, rb: 0.055, part: 'arm' },
       { a: rearElbow, b: rearHand, ra: 0.04, rb: 0.033, part: 'arm' },
-      { a: hipF, b: kneeF, ra: 0.075, rb: 0.055, part: 'leg' },
+      { a: hipF, b: kneeF, ra: 0.1, rb: 0.08, part: 'leg' },
       { a: kneeF, b: footF, ra: 0.055, rb: 0.04, part: 'leg' },
-      { a: hipB, b: kneeB, ra: 0.075, rb: 0.055, part: 'leg' },
+      { a: hipB, b: kneeB, ra: 0.1, rb: 0.08, part: 'leg' },
       { a: kneeB, b: footB, ra: 0.055, rb: 0.04, part: 'leg' },
       { a: madd(footF, f, -0.07), b: madd(footF, f, 0.15), ra: 0.045, rb: 0.04, part: 'foot' },
       { a: madd(footB, r, -0.07), b: madd(footB, r, 0.12), ra: 0.045, rb: 0.04, part: 'foot' },
+      { a: madd(pelvis, f, TRUNK.wide), b: madd(chest, f, TRUNK.wide), ra: TRUNK.depth, rb: TRUNK.depth, part: 'torso' },
+      { a: madd(pelvis, f, -TRUNK.wide), b: madd(chest, f, -TRUNK.wide), ra: TRUNK.depth, rb: TRUNK.depth, part: 'torso' },
     ];
   }
 
