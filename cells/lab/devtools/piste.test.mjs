@@ -275,7 +275,8 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   const second = (me, them, c, st) => { if (st.t < 0.5) return {}; const r = c.rep, w = c.w;
     if (r.ripAt === undefined || c.since < r.ripAt + 0.2) return { ...steer(me, chest(them), st, 1), lunge: me.extension > 0.6 };
     if (!w.clashes.some((k) => k.at >= r.ripAt + 0.05)) return { ...thumb(-1, 0), extend: 0.3, lunge: true };
-    st.tg ??= openTarget(me, them); return { ...steer(me, TARGETS[st.tg].at(them), st), lunge: true }; };
+    // (the counter-riposte to the chest: their arm is out of the way now, parried aside)
+    return { ...steer(me, chest(them), st), lunge: true }; };
   expect('lunge, parry their riposte from the lunge, counter-riposte (most repetitions)', 'second-intention', second, true, 'second intention', 3, 2);
   expect('a lunge held there, not parrying the riposte, fails', 'second-intention', (me, them, c, st) => (st.t < 0.5 ? {} : { ...steer(me, chest(them), st, 1), lunge: me.extension > 0.6 }), false, undefined, 2);
   // and the pace: slow to start, faster with each good one, passed with three at full speed

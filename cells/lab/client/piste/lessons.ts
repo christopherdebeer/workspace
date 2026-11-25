@@ -91,7 +91,7 @@ const SECOND = { gap: 1.7, react: 0.08, hand: -0.28, turn: 0.25, time: 0.25, tem
 const ONETWO = { retreat: true, gap: 1.6, believe: 0.35, react: 0.12, time: 0.3, hand: -0.28, turn: 0.25 };
 const DIS = { gap: 1.6, sweep: -0.28, sweepPoint: -0.1, time: 0.35 };
 /** sixte: where the coach's hand starts (across, to your outside) and how far outside the middle of your chest it aims, m */
-const SIXTE = { aim: 0.06, under: [0.12, -0.2] as [number, number], viaFor: 0.35, handAfter: -0.22 };
+const SIXTE = { aim: 0.06, under: [0.12, -0.2] as [number, number], viaFor: 0.35, handAfter: -0.3 };
 /** the low lines: where on the trunk (pelvis 0 .. chest 1) septime's attack goes, and how far down the thigh octave's */
 const LOW = { at: 0.32, thigh: 0.25, gap: 1.0, tempo: 1.1, outside: 0.09, hand0: -0.16, octaveGap: 1.0, point0: 0 };
 

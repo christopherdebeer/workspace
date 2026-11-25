@@ -143,10 +143,10 @@ export class Fencer {
     // the weapon arm reaches for the grip, just behind the guard
     const P = this.blade ? this.blade.pommel : this.shoulder, G = this.blade ? this.blade.guard : this.shoulder;
     this.hand = this.blade ? madd(G, norm(sub(P, G)), BODY.gripToGuard) : this.shoulder;
-    this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.4), [0, -1, 0]));
-    // (the elbow as it's drawn: tucked under the forearm, as an arm carried forward holds it. The body the blades meet
-    // keeps the elbow above, which the lessons are tuned to)
-    this.elbowLook = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.2), [0, -1, 0]));
+    // (the elbow tucked under the forearm, a little out, as an arm carried forward holds it: one elbow, for the blades to
+    // meet and for the eye)
+    this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.2), [0, -1, 0]));
+    this.elbowLook = this.elbow;
     // the rear arm, relaxed, low and a little back (the modern épée carriage: no raised arm); in a lunge it swings back
     // and straightens, for balance
     const rearElbow = toWorld(F, hipsFwd - 0.12 - 0.12 * L, hipsUp + 0.26 - 0.06 * L, -0.2);
