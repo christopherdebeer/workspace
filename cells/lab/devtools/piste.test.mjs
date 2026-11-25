@@ -5,9 +5,9 @@
 import { build } from 'esbuild';
 import { checks } from './harness.mjs';
 const lab = new URL('../client/piste/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './box'; export * from './intent'; export * from './v3'; export * from './blade'; export * from './contact'; export * from './lessons'; export * from './replay'; export * from './time'; export * from './fencer';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './box'; export * from './intent'; export * from './v3'; export * from './blade'; export * from './contact'; export * from './lessons'; export * from './replay'; export * from './time'; export * from './fencer'; export * from './ai';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
-const { Bout, EPEE, FOIL, Opponent, SPARRING, Box, award, idle, LESSONS, LessonRunner, Recorder, cloneBout, TimeDirector, aimAt, add, lerp } = M;
+const { Bout, EPEE, FOIL, Opponent, SPARRING, LEVELS, Box, award, idle, LESSONS, LessonRunner, Recorder, cloneBout, TimeDirector, aimAt, add, lerp, reachFor, openTarget, TARGETS, toLocal, norm, sub, FATIGUE, Dummy } = M;
 const c = checks();
 const DT = 1 / 60;
 
@@ -192,8 +192,16 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
 }
 
 // the lessons: for each, a student doing it right passes its repetitions, and one doing it wrong is told what was wrong
+// (the scripted students watch their point and correct it, as a person does)
 {
-  const chest = (f) => add(f.capsules[0].b, [0, -0.06, 0]);
+  const chest = (f) => lerp(f.capsules[0].a, f.capsules[0].b, M.TORSO_AT);
+  const steer = (me, p, st) => {
+    const e = Math.max(0.15, Math.min(1, reachFor(me, p))), a = aimAt(me, p, e), F = { ...me.frame, o: [0, 0, 0] }, g = me.blade.guard, loc = (d) => toLocal(F, norm(d));
+    const w = loc(sub(p, g)), h = loc(sub(me.blade.tip, g)), cl = (x) => Math.max(-0.35, Math.min(0.35, x));
+    st.c ??= [0, 0];
+    if (me.extension > 0.3) st.c = [cl(st.c[0] + (Math.atan2(w[2], w[0]) - Math.atan2(h[2], h[0])) * 0.15), cl(st.c[1] + (Math.atan2(w[1], Math.hypot(w[0], w[2])) - Math.atan2(h[1], Math.hypot(h[0], h[2]))) * 0.15)];
+    return { extend: e, hand: a.hand, point: [a.point[0] + st.c[0], a.point[1] + st.c[1]] };
+  };
   function lesson(id, bot, reps) {
     const b = new Bout({ weapon: EPEE, to: 5, referee: false }), run = new LessonRunner(b, LESSONS.find((l) => l.id === id), 3);
     run.pace = 1; run.begin();
@@ -201,7 +209,7 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
     while (res.length < reps && n++ < 60 * 120) {
       const [me, them] = b.fencers;
       if (run.stage === 'set') st = {};
-      me.intent = { ...idle(), ...(run.frozen ? {} : bot(me, them, run.c ?? run['c'], st)) }; them.intent = { ...run.coach.intent(DT) };
+      me.intent = { ...idle(), ...(run.frozen ? {} : bot(me, them, run.c, st)) }; them.intent = { ...run.coach.intent(DT) };
       b.advance(DT); run.hear(b.drain());
       const before = run.reps; run.update(DT, DT);
       if (run.reps > before) res.push(run.last);
@@ -209,18 +217,19 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
     }
     return res;
   }
-  const expect = (what, id, bot, ok, said, reps = 3) => {
-    const res = lesson(id, bot, reps), good = res.length === reps && res.every((o) => o.ok === ok && (!said || o.say === said));
+  const expect = (what, id, bot, ok, said, reps = 3, atLeast = reps) => {
+    const res = lesson(id, bot, reps), good = res.length === reps && res.filter((o) => o.ok === ok && (!said || o.say === said)).length >= atLeast;
     c.ok(`lesson ${id}: ${what}`, good, res.map((o) => `${o.ok ? 'ok' : 'no'}: ${o.say}`));
   };
   const mirror = (me, them, c, st) => { if (them.act && st.seen === undefined) { st.seen = c.since; st.kind = them.act.kind === 'advance' ? 'retreat' : 'advance'; } if (st.seen !== undefined && !st.done && c.since - st.seen > 0.25) { st.done = true; return { step: st.kind }; } return {}; };
   const thrust = (me, them) => ({ extend: 1, ...aimAt(me, chest(them), 1) });
   const lungeRight = (me, them) => ({ ...thrust(me, them), lunge: me.extension > 0.75 });
-  const parryBot = (side, far = side < 0 ? 0.3 : 0.14) => (me, them, c, st) => {
+  const parryBot = (side, far = 0.3) => (me, them, c, st) => {
     const w = c.w;
-    if (w.attackAt !== null && st.go === undefined) st.go = w.attackAt + 0.2;
-    if (w.clashes.length && st.rip === undefined) st.rip = c.since + 0.05;
-    if (st.rip !== undefined && c.since > st.rip) return thrust(me, them);
+    if (w.attackAt !== null && st.go === undefined) st.go = w.attackAt + 0.25;
+    if (w.attackAt !== null && w.clashes.some((k) => k.at >= w.attackAt + 0.05) && st.rip === undefined) st.rip = c.since + 0.05;
+    // (the riposte: to whatever their bell leaves open, with as much arm as the distance wants)
+    if (st.rip !== undefined && c.since > st.rip) { st.tg ??= openTarget(me, them); const I = steer(me, TARGETS[st.tg].at(them), st); st.lunge ??= c.bout.gap > 1.0 && I.extend >= 1; return { ...I, lunge: st.lunge && me.extension > 0.7 }; }
     if (st.go !== undefined && c.since > st.go) { const hx = side * far; return { hand: [hx, 0], point: [-Math.atan(hx / 1.6) * 0.6, 0] }; }
     return {};
   };
@@ -236,9 +245,10 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   expect('parry quarte and riposte', 'quarte', parryBot(-1), true, 'quarte, riposte');
   expect('no parry is touched', 'quarte', () => ({}), false, 'touched');
   expect('the wrong side is touched', 'quarte', parryBot(1), false, 'touched');
-  expect('parry sixte and riposte', 'sixte', parryBot(1), true, 'sixte, riposte');
-  expect('a stop-hit to the arm as they step', 'stop-hit', (me, them, c) => (c.rep.stepAt != null ? { extend: 1, ...aimAt(me, arm(them), 1) } : {}), true, 'stop-hit');
+  expect('a stop-hit to the arm as they step', 'stop-hit', (me, them, c, st) => (c.rep.stepAt != null ? steer(me, arm(them), st) : {}), true, 'stop-hit');
   expect('a stop-hit into their attack is late', 'stop-hit', (me, them, c) => (c.w.attackAt != null && c.since - c.w.attackAt > 0.12 ? { extend: 1, ...aimAt(me, arm(them), 1) } : {}), false, 'late');
+  expect('a line set before they step: they walk onto it (most repetitions)', 'line', (me, them, c, st) => ({ ...steer(me, chest(them), st), extend: 1 }), true, 'onto your line', 3, 2);
+  expect('no line is told so', 'line', () => ({}), false, undefined, 2);
   // and the pace: slow to start, faster with each good one, passed with three at full speed
   {
     const b = new Bout({ weapon: EPEE, to: 5, referee: false }), run = new LessonRunner(b, LESSONS.find((l) => l.id === 'extension'), 3);
@@ -254,13 +264,63 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   }
 }
 
+
+// a tired arm: held straight it tires (weaker, its point trembling), bent it recovers
+{
+  const b = new Bout({ weapon: EPEE, to: 5, referee: false });
+  b.place(3);
+  const A = b.fencers[0];
+  const tips = [];
+  for (let s = 0; s < 10; s += DT) { A.intent = { ...idle(), extend: 1 }; b.fencers[1].intent = idle(); b.advance(DT); if (s > 8) tips.push(A.blade.tip[1]); }
+  const spread = Math.max(...tips) - Math.min(...tips);
+  c.ok('held straight for ten seconds the arm is exhausted (fatigue > 0.9)', A.fatigue > 0.9, A.fatigue);
+  c.ok('…weaker (strength below 0.5)', A.blade.strength < 0.5, A.blade.strength);
+  c.ok('…and its point trembles (over 1 cm) and sags', spread > 0.01, spread);
+  for (let s = 0; s < 6; s += DT) { A.intent = idle(); b.advance(DT); }
+  c.ok('bent for six seconds it has recovered (fatigue < 0.1)', A.fatigue < 0.1, A.fatigue);
+}
+
+// the clock: three minutes of fencing time, then (level) a priority minute, which priority wins if it runs out level
+{
+  const b = new Bout({ weapon: EPEE, to: 5, seed: 3 }), ev = run(b, 260, () => idle());
+  const pr = ev.find((e) => e.type === 'priority'), over = ev.find((e) => e.type === 'over');
+  c.ok('time runs out at three minutes of fencing', ev.some((e) => e.type === 'time'));
+  c.ok('level at time: a priority minute, priority drawn', !!pr, ev.map((e) => e.type));
+  c.ok('…and run out level, priority wins', over && pr && over.winner === pr.who, [over, pr]);
+}
+
+// against a point held in line, a good opponent doesn't just walk onto it: the master beats it and draws it out, and
+// holding it costs the arm. (Line players with a human's reaction and aim, over three bouts each.)
+{
+  let R = 7; const rnd = () => ((R = (R * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const chest = (f) => lerp(f.capsules[0].a, f.capsules[0].b, M.TORSO_AT);
+  const seen = (st, op) => { (st.h ??= []).push({ c: chest(op), adv: op.act?.kind === 'advance' }); if (st.h.length > 15) st.h.shift(); st.k = (st.k ?? 0) + 1; if (st.k % 30 === 1) st.off = [0, (rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.08]; return { ...st.h[0], c: add(st.h[0].c, st.off) }; };
+  const players = {
+    'a held line': (me, op, st) => ({ ...idle(), extend: 1, ...aimAt(me, seen(st, op).c, 1) }),
+    'a line timed to their steps': (me, op, st) => { const v = seen(st, op); st.t = v.adv ? 0 : (st.t ?? 0) + DT; const out = v.adv || st.t < 0.6 || st.t % 3 > 1.2; return { ...idle(), extend: out ? 1 : 0.2, ...aimAt(me, v.c, out ? 1 : 0.2) }; },
+  };
+  for (const [name, play] of Object.entries(players)) {
+    const tally = { you: 0, them: 0, fatigue: 0, n: 0 };
+    for (let seed = 1; seed <= 3; seed++) {
+      const b = new Bout({ weapon: EPEE, to: 5, seed }), them = new Opponent(b, 1, LEVELS[3].style, seed), st = {};
+      for (let i = 0; i < 60 * 200 && b.phase !== 'over'; i++) {
+        b.fencers[0].intent = play(b.fencers[0], b.fencers[1], st); b.fencers[1].intent = { ...them.intent(DT) };
+        b.advance(DT); tally.fatigue += b.fencers[0].fatigue; tally.n++;
+        for (const e of b.drain()) if (e.type === 'halt' && !e.call.startsWith('coup double')) { if (e.points[0]) tally.you++; if (e.points[1]) tally.them++; }
+      }
+    }
+    c.ok(`the master against ${name}: scores at least half as often as it`, tally.them >= tally.you * 0.5, tally);
+    c.ok(`…and it costs the arm (mean fatigue over 0.25)`, tally.fatigue / tally.n > 0.25, tally.fatigue / tally.n);
+  }
+}
+
 // two stand-ins fence a bout to five
 {
   const b = new Bout({ weapon: EPEE, to: 5 }), ai = [new Opponent(b, 0, SPARRING, 3), new Opponent(b, 1, SPARRING, 4)];
   const t0 = performance.now();
   const ev = run(b, 240, (k) => (b.phase === 'over' ? idle() : ai[k].intent(DT)));
   const ms = performance.now() - t0, simulated = b.t;
-  c.ok('two stand-ins finish a bout to five', b.phase === 'over' && Math.max(...b.score) === 5, b.score);
+  c.ok('two stand-ins finish a bout (five touches, or the clock)', b.phase === 'over', b.score);
   c.ok('it runs faster than real time by 5× or more', ms / 1000 < simulated / 5, { ms, simulated });
   const parts = ev.filter((e) => e.type === 'light').map((e) => e.light.part);
   console.log(`      (${b.score.join('–')} in ${simulated.toFixed(0)} s, ${ms.toFixed(0)} ms; touches on ${parts.join(', ')})`);

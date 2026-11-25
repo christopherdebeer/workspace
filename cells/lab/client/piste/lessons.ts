@@ -15,7 +15,8 @@ import type { Fencer } from './fencer';
 import { Coach } from './coach';
 import type { Light } from './box';
 import { seeded, type Rand } from '../kit/rng';
-import { type V, add, scale, clamp } from './v3';
+import { type V, add, scale, clamp, lerp } from './v3';
+import { TORSO_AT } from './ai';
 
 export interface Controls { feet: boolean; extend: boolean; lunge: boolean; hand: boolean }
 export interface Outcome { ok: boolean; say: string; detail?: string }
@@ -61,7 +62,8 @@ export interface Lesson {
 }
 
 const ALL: Controls = { feet: true, extend: true, lunge: true, hand: true };
-const chest = (f: Fencer): V => add(f.capsules[0].b, [0, -0.06, 0]);
+/** the middle of the chest (where a point lands square; near the top the surface curves away) */
+const chest = (f: Fencer): V => lerp(f.capsules[0].a, f.capsules[0].b, TORSO_AT);
 const pct = (x: number) => (x < 0.34 ? 'forte' : x < 0.67 ? 'middle' : 'foible');
 const N = (x: number) => `${x.toFixed(1)} N`;
 
@@ -69,6 +71,15 @@ const N = (x: number) => `${x.toFixed(1)} N`;
 function open(c: Ctx) { c.coach.rest(); c.coach.hand = [0.14, -0.1]; c.coach.point = [0.45, -0.45]; }
 /** a touch for the student, valid */
 const mine = (c: Ctx) => c.lights[0]?.valid ? c.lights[0] : null;
+
+/** how high on the chest the coach's attacks come in the high-line parry lessons (above the middle: a high line), m */
+const PARRY_HIGH = 0.08;
+/** the distance the parry lessons start from: the coach's arm reaches you from here without a lunge, m */
+const PARRY_GAP = 1.0;
+/** how fast the coach's arm goes out in the parry lessons (per second) */
+const PARRY_TEMPO = 2;
+/** sixte: where the coach's hand starts (across, to your outside) and how far outside the middle of your chest it aims, m */
+const SIXTE = { hand: 0.04, aim: 0.04 };
 
 export const LESSONS: Lesson[] = [
   {
@@ -158,7 +169,8 @@ export const LESSONS: Lesson[] = [
     },
   },
   parry('quarte', -1),
-  parry('sixte', 1),
+  // (parry('sixte', 1) is set aside for now: side on, the outside line is the sword arm's own, and an attack there
+  // that a sixte parry is the answer to needs a disengage this coach doesn't have yet)
   {
     id: 'stop-hit', title: 'The stop-hit to the arm',
     brief: [
@@ -191,6 +203,36 @@ export const LESSONS: Lesson[] = [
       return null;
     },
   },
+  {
+    id: 'line', title: 'The point in line',
+    brief: [
+      'Arm straight, point on their chest: a point in line. In épée it\'s a wall. Whoever walks onto it is hit, and they have to deal with it before they can attack you.',
+      'Set it before they come, not as they arrive. Hold it while they step in, and they run onto it.',
+      'It costs you. An arm held straight out tires within seconds: the point starts to tremble and sag, and a tired arm gives way to a beat. Hold it when it matters, then bend the arm and rest it.',
+      'Left thumb up to extend; right thumb to keep the point on their chest.',
+    ],
+    prompt: 'set your line before they step in',
+    controls: { feet: false, extend: true, lunge: false, hand: true },
+    gap: 1.35, start: 0.5,
+    frame(c) {
+      const r = c.rep, co = c.coach;
+      if (r.wait === undefined) { co.rest(); co.point = [0, 0.35]; r.wait = 0.9 + c.rnd() * 0.6; r.steps = 0; r.stepAt = null; r.extAtStep = 0; }
+      // (careless: a step in with the point up off its line, then an attack)
+      if (c.since > (r.wait as number) && (r.steps as number) < 1) {
+        co.step('advance'); r.steps = (r.steps as number) + 1; r.stepAt = c.since;
+        if (r.steps === 1) r.extAtStep = c.student.extension;
+      }
+      // (and in, carelessly, its point still up: it hasn't dealt with your blade at all)
+      if (r.steps === 1 && c.since - (r.stepAt as number) > 0.5 && c.w.attackAt === null) { co.extend = 0.6; co.rate = 9; c.w.attackAt = c.since; }
+      if (c.w.attackAt !== null && c.them.extension > 0.4) co.lunge = true;
+      const [a, b] = c.lights, locked = c.bout.box.locked(c.bout.t);
+      if (b && locked) return { ok: false, say: a ? 'coup double' : 'touched', detail: a ? 'your line was late: set it before they step, and they run onto it first' : (r.extAtStep as number) < 0.8 ? 'no line: extend before they step in (left thumb up) and keep the point on their chest' : 'your point was off their chest: keep it on them (right thumb)' };
+      if (a && locked && (r.extAtStep as number) < 0.8) return { ok: false, say: 'no line', detail: `it landed, but your arm was ${Math.round((r.extAtStep as number) * 100)}% out as they stepped: set the line first, then they walk onto it` };
+      if (a && locked) return { ok: true, say: 'onto your line', detail: `set before they stepped; they came onto it: on the ${a.part}` };
+      if (c.since > 6 || (c.w.attackAt !== null && c.since - c.w.attackAt > 1.6)) return { ok: false, say: 'nothing', detail: 'set your line before they step in: arm straight, the point on their chest' };
+      return null;
+    },
+  },
 ];
 
 /** a simple parry on one side (−1 quarte, your left; +1 sixte, your right), and a riposte */
@@ -206,20 +248,27 @@ function parry(name: string, side: -1 | 1): Lesson {
     ],
     prompt: `parry ${name} (right thumb ${side < 0 ? 'left' : 'right'}), then riposte`,
     controls: ALL,
-    gap: 1.35, start: 0.35,
+    gap: PARRY_GAP, start: 0.35,
     frame(c) {
       const r = c.rep, co = c.coach, w = c.w;
       if (r.wait === undefined) {
-        // its blade on that side of yours before it goes: in sixte its hand comes across to your outside line
-        co.rest(); r.wait = 0.7 + c.rnd() * 0.9; co.hand = side < 0 ? [0.04, 0] : [-0.24, 0]; co.point = side < 0 ? [0, 0] : [0.12, 0];
+        co.rest(); r.wait = 0.7 + c.rnd() * 0.9; co.hand = side < 0 ? [0.04, 0] : [SIXTE.hand, 0]; co.point = [0, 0];
       }
       if (w.attackAt === null && c.since > (r.wait as number)) {
         // along the line: its hand on that side, its point at your chest on that side
-        co.aim = () => add(chest(c.student), scale(c.student.frame.r, side * 0.04));
-        co.point = [0, 0]; co.extend = 1; w.attackAt = c.since;
+        // (in quarte it comes at the inside of your chest; in sixte it comes round to the outside, well clear of your
+        // blade held in quarte)
+        // (side on, your outside line isn't your chest: it's your front shoulder and arm, outside your blade)
+        co.aim = () => side < 0 ? add(add(chest(c.student), [0, PARRY_HIGH, 0]), scale(c.student.frame.r, -0.04)) : add(c.student.shoulder, scale(c.student.frame.r, SIXTE.aim));
+        // (at a lesson's tempo: half a second from the first movement, time for a reaction and a parry at full pace)
+        co.point = [0, 0]; co.extend = 1; co.rate = PARRY_TEMPO; w.attackAt = c.since;
       }
-      if (w.attackAt !== null && c.them.extension > 0.55) co.lunge = c.since - w.attackAt < 1.6;
-      const [a, b] = c.lights, parried = w.clashes.find((k) => w.attackAt !== null && k.at >= w.attackAt);
+      // (a parry meets the attack as it comes: the blades touching as it sets off are only the blades touching)
+      const [a, b] = c.lights, parried = w.clashes.find((k) => w.attackAt !== null && k.at >= w.attackAt + 0.05);
+      // (your left is its right: a parry to your left carries its point to its right)
+      // (parried, it gives its blade and opens for the riposte; it attacks from where its arm reaches, without a lunge,
+      // so the riposte is at a distance a riposte can land from)
+      if (parried) { co.give(-side * 0.4, 0.45); co.extend = 0.4; }
       if (b) {
         const went = side < 0 ? w.handMin : w.handMax, wrong = side < 0 ? w.handMax : w.handMin;
         if (!parried) return { ok: false, say: 'touched', detail: Math.abs(wrong) > 0.06 && Math.abs(wrong) > Math.abs(went) ? `wrong side: ${name} is to your ${side < 0 ? 'left' : 'right'}` : Math.abs(went) > 0.06 ? 'late: move as their arm starts, not as it lands' : `no parry: right thumb ${side < 0 ? 'left' : 'right'} as they come` };
@@ -284,6 +333,8 @@ export class LessonRunner {
       if (e.type === 'clash') this.c.w.clashes.push({ at: this.c.since, where: e.where, strength: e.strength });
       // (their blade on your bell: a parry at the very forte)
       if (e.type === 'guard' && e.who === 0) this.c.w.clashes.push({ at: this.c.since, where: [0, 0.6], strength: e.strength });
+      // (yours on their bell: a beat or a parry that met their forte)
+      if (e.type === 'guard' && e.who === 1) this.c.w.clashes.push({ at: this.c.since, where: [0.6, 0], strength: e.strength });
     }
     // (blades that slid into contact without striking still met)
     const b = this.bout;

@@ -147,6 +147,8 @@ function hear(events: BoutEvent[]) {
     else if (e.type === 'halt' && mode === 'bout') say(e.call || 'halt', `${e.points[0] || e.points[1] ? 'point' : 'no point'}`);
     else if (e.type === 'allez' && mode === 'bout') { say('allez', ''); setTimeout(() => { if ($('say').textContent === 'allez') say('', ''); }, 700); }
     else if (e.type === 'over') say(e.winner === 0 ? 'you win' : 'they win', 'tap to fence again');
+    else if (e.type === 'time') say('time', '');
+    else if (e.type === 'priority') say('a minute more', `priority: ${e.who === 0 ? 'you' : 'them'} (it wins if the minute runs out level)`);
     else if (e.type === 'clash' && e.strength > 0.8) navigator.vibrate?.(Math.min(25, 4 + e.strength * 4));
   }
 }
@@ -154,6 +156,12 @@ function hear(events: BoutEvent[]) {
 function scoreboard(b: Bout) {
   lamp(0, b.box.lights[0]); lamp(1, b.box.lights[1]);
   $('score').textContent = `${b.score[1]} · ${b.score[0]}`;
+  const t = Math.max(0, Math.ceil(b.clock));
+  $('clock').textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}${b.priority === null ? '' : b.priority === 0 ? '  · priority you' : '  · priority them'}`;
+  // (your arm: how tired it is, shown once it starts to tell)
+  const f = b.fencers[0].fatigue;
+  $('arm').style.setProperty('--f', String(f));
+  $('arm').classList.toggle('on', f > 0.12);
 }
 canvas.addEventListener('pointerdown', () => { $('hint').style.opacity = '0'; if (bout.phase === 'over') { bout.restart(); say('', ''); } });
 
@@ -236,7 +244,7 @@ function readOut(rate: number) {
     `tip  you ${f(peaks[0], 1)} N  them ${f(peaks[1], 1)} N   (closes at ${weapon.tipForce} N, ${weapon.tipDwell * 1000} ms)`,
     `bow  you ${f(me.blade.bow() * 100, 1)} cm  them ${f(op.blade.bow() * 100, 1)} cm`,
     `hand effort  you ${f(me.blade.effort[1] * 100, 0)}%  them ${f(op.blade.effort[1] * 100, 0)}%   ext ${f(me.extension)}`,
-    `critical ${f(director.critical)}  assist ${f(director.assist)}`,
+    `critical ${f(director.critical)}  assist ${f(director.assist)}   arm fatigue you ${f(me.fatigue)}  them ${f(op.fatigue)}`,
     them instanceof Opponent ? `them: ${them.tactic}` : runner ? `lesson: ${runner.stage}` : `them: ${ai}`,
   ].join('\n');
 }

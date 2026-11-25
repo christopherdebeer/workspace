@@ -27,7 +27,7 @@ export interface Muscle {
   /** the most force each hand particle can be pushed with, N (pommel, guard) */
   fPommel: number; fGuard: number;
 }
-export const MUSCLE: Muscle = { omega: 30, zeta: 1, fPommel: 45, fGuard: 80 };
+export const MUSCLE: Muscle = { omega: 20, zeta: 1, fPommel: 45, fGuard: 80 };
 
 /** effective masses at the hand, kg (the arm's inertia felt at the grip, and the guard) */
 const M_POMMEL = 0.5, M_GUARD = 0.75;
@@ -50,6 +50,8 @@ export class Blade {
   /** the thumb's direction (the blade's set bends away from it) */
   thumb: V = [0, 1, 0];
   muscle: Muscle = { ...MUSCLE };
+  /** what's left of the arm's strength (fatigue takes it): scales what the muscles can push */
+  strength = 1;
   /** the force each hand particle was pushed with last step (for a readout: how hard the hand is working) */
   readonly effort = new Float64Array(2);
   private sweep = 0;
@@ -135,7 +137,7 @@ export class Blade {
     }
     const lh = Math.max(0.05, Math.hypot(x[3] - x[0], x[5] - x[2]));
     const hold = [-(Wd / lh), W + Wd / lh];
-    const { omega, zeta } = this.muscle, fmax = [this.muscle.fPommel, this.muscle.fGuard];
+    const { omega, zeta } = this.muscle, fmax = [this.muscle.fPommel * this.strength, this.muscle.fGuard * this.strength];
     for (let j = 0; j < 2; j++) {
       const k = m[j] * omega * omega, c = 2 * m[j] * omega * zeta;
       let fx = 0, fy = 0, fz = 0;

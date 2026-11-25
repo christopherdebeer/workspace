@@ -51,14 +51,14 @@
    },
    {
     "name": "wrist",
-    "title": "Touched on the wrist",
-    "caption": "they lunged as you came forward, at the nearest target: your arm. Their lamp is lit",
+    "title": "Touched on the arm",
+    "caption": "your bell covered your chest, so they went for what it didn't: your arm. Their lamp is lit",
     "file": "v-wrist.jpg"
    },
    {
     "name": "double",
-    "title": "Coup double, from the side",
-    "caption": "both tips home inside the 45 ms: both blades bowed against the chests, both lamps lit",
+    "title": "A touch, from the side",
+    "caption": "the lunge home, the blade bowed against the chest, your lamp lit; the clock under the score",
     "file": "v-double.jpg"
    },
    {

@@ -10,7 +10,7 @@ import { Blade, thumbOf } from './blade';
 import type { Intent } from './intent';
 import { idle } from './intent';
 import type { Part, Weapon } from './weapons';
-import { type V, type Frame, add, clamp, cross, dirWorld, dist, dot, lerp, madd, norm, rot, scale, smooth, sub, toWorld, len } from './v3';
+import { type V, type Frame, add, clamp, cross, dirWorld, dot, madd, norm, rot, scale, smooth, sub, toWorld, len } from './v3';
 
 /** body measurements, m (an adult of 1.78 m: dials, not truths) */
 export const BODY = {
@@ -24,6 +24,10 @@ export const BODY = {
   upperArm: 0.3, forearm: 0.28, gripToGuard: 0.06,
   eye: 0.7,             // eye above the pelvis
 };
+
+/** how an arm tires: from what extension, seconds held straight to exhaustion, seconds bent to recover fully, how much
+ * strength it costs at the end, how far the point trembles and the hand sags, m */
+export const FATIGUE = { from: 0.55, tire: 9, rest: 5, weak: 0.55, tremor: 0.018, droop: 0.05 };
 
 type Act = { kind: 'advance' | 'retreat' | 'lunge' | 'recover'; t: number; dur: number; from: number };
 
@@ -45,6 +49,14 @@ export class Fencer {
   capsules: Capsule[] = [];
   shoulder: V = [0, 0, 0]; elbow: V = [0, 0, 0]; hand: V = [0, 0, 0];
   eye: V = [0, 0, 0];
+  /**
+   * How tired the weapon arm is, 0..1. An arm held out at shoulder height with a weapon at the end of it tires in
+   * seconds; it recovers when it's bent. A tired arm is weaker (its muscles push less), and its point wanders: the
+   * tremor of a tired muscle, and a droop.
+   */
+  fatigue = 0;
+  /** seconds this fencer has lived (the tremor's clock: deterministic) */
+  private age = 0;
   /** smoothed intent (a hand doesn't teleport even when a thumb does) */
   private ext = 0; private hx = 0; private hy = 0; private py = 0; private px = 0; private roll = 0;
 
@@ -60,6 +72,8 @@ export class Fencer {
   reset(s: number) {
     this.s = s; this.lunge = 0; this.front = BODY.stance / 2; this.back = -BODY.stance / 2; this.act = null; this.queued = null;
     this.ext = this.hx = this.hy = this.px = this.py = this.roll = 0;
+    this.fatigue = 0;
+    this.blade.strength = 1;
     this.intent = idle();
     this.pose();
     const [P, G] = this.handTarget();
@@ -158,17 +172,25 @@ export class Fencer {
    */
   handTarget(): [V, V] {
     const F = this.frame, e = this.ext;
-    const S = this.shoulder, toS = (a: number, b: number, c: number) => add(S, dirWorld(F, a, b, c));
-    let G = toS(0.36 + 0.23 * e, -0.2 + 0.16 * e, 0.12 - 0.11 * e);
-    G = add(G, add(scale(F.r, this.hx), scale(F.u, this.hy)));
-    // (the arm only reaches so far)
-    const reach = BODY.upperArm + BODY.forearm + BODY.gripToGuard - 0.005, d = sub(G, S), l = len(d);
-    if (l > reach) G = madd(S, d, reach / l - 1);
+    // (a tired arm trembles, at a tired muscle's eight to twelve times a second, and sags)
+    const f = this.fatigue, a = this.age, wob = FATIGUE.tremor * f * f;
+    const tx = wob * (Math.sin(a * 53.4) * 0.6 + Math.sin(a * 71.9 + 1.3) * 0.4), ty = wob * (Math.sin(a * 61.2 + 2.1) * 0.6 + Math.sin(a * 83.7) * 0.4);
+    const G = this.guardFor(e, this.hx + tx, this.hy + ty - FATIGUE.droop * f * e);
     let dir = lineOf(F, e);
     dir = rot(dir, F.u, -this.px);
     dir = rot(dir, norm(cross(dir, F.u)), this.py);
     const P = madd(G, dir, -this.weapon.grip);
     return [P, G];
+  }
+
+  /** where the guard is sent at extension `e` with the hand moved (hx right, hy up), within the arm's reach */
+  guardFor(e: number, hx: number, hy: number): V {
+    const F = this.frame, S = this.shoulder, toS = (a: number, b: number, c: number) => add(S, dirWorld(F, a, b, c));
+    let G = toS(0.36 + 0.23 * e, -0.2 + 0.16 * e, 0.12 - 0.11 * e);
+    G = add(G, add(scale(F.r, hx), scale(F.u, hy)));
+    const reach = BODY.upperArm + BODY.forearm + BODY.gripToGuard - 0.005, d = sub(G, S), l = len(d);
+    if (l > reach) G = madd(S, d, reach / l - 1);
+    return G;
   }
 
   /** the intent, smoothed by how fast a body can do it (the muscle in blade.ts does the rest) */
@@ -184,6 +206,11 @@ export class Fencer {
 
   /** one substep of the body: feet, pose, and where the hand is sent */
   step(h: number) {
+    this.age += h;
+    // (tiring while the arm is out, the more the straighter; recovering while it's bent)
+    const e = this.ext;
+    this.fatigue = clamp(this.fatigue + h * (e > FATIGUE.from ? ((e - FATIGUE.from) / (1 - FATIGUE.from)) / FATIGUE.tire : -(1 - e) / FATIGUE.rest), 0, 1);
+    this.blade.strength = 1 - FATIGUE.weak * this.fatigue;
     this.feet(h);
     this.follow(h);
     this.pose();
@@ -205,12 +232,29 @@ export const lineOf = (F: Frame, e: number): V => norm(dirWorld(F, 1, 0.16 - 0.1
  * The intent that points `f`'s weapon at world point `p` at extension `e`: the wrist turns the blade off its natural
  * line toward it, and the hand shifts a little toward it too. (The inverse of `handTarget`, near enough.)
  */
-export function aimAt(f: Fencer, p: V, e: number): { hand: [number, number]; point: [number, number] } {
-  const F = f.frame, O = { ...F, o: [0, 0, 0] as V };
-  const want = toLocalDir(O, norm(sub(p, f.blade.guard))), base = toLocalDir(O, lineOf(F, e));
-  const yaw = Math.atan2(want[2], want[0]) - Math.atan2(base[2], base[0]);
-  const pitch = Math.atan2(want[1], Math.hypot(want[0], want[2])) - Math.atan2(base[1], Math.hypot(base[0], base[2]));
-  return { point: [clamp(yaw, -0.6, 0.6), clamp(pitch, -0.6, 0.6)], hand: [clamp(yaw * 0.15, -0.08, 0.08), clamp(pitch * 0.2, -0.08, 0.08)] };
+export function aimAt(f: Fencer, p: V, e: number, extraHand: [number, number] = [0, 0]): { hand: [number, number]; point: [number, number] } {
+  // the guard doesn't depend on the wrist, so: where this extension puts it, then the wrist that points from there at
+  // p (heading and elevation separately: the wrist's turn and tilt are exactly those); the hand shifted a little
+  // toward p, and the wrist worked out again from the shifted guard
+  const F = f.frame, O = { ...F, o: [0, 0, 0] as V }, base = toLocalDir(O, lineOf(F, e));
+  const solve = (hand: [number, number]) => {
+    const G = f.guardFor(e, hand[0] + extraHand[0], hand[1] + extraHand[1]), want = toLocalDir(O, norm(sub(p, G)));
+    return [Math.atan2(want[2], want[0]) - Math.atan2(base[2], base[0]), Math.atan2(want[1], Math.hypot(want[0], want[2])) - Math.atan2(base[1], Math.hypot(base[0], base[2]))];
+  };
+  const [y0, p0] = solve([0, 0]);
+  const hand: [number, number] = [clamp(y0 * 0.15, -0.08, 0.08), clamp(p0 * 0.2, -0.08, 0.08)];
+  const [yaw, pitch] = solve(hand);
+  return { point: [clamp(yaw, -0.7, 0.7), clamp(pitch, -0.7, 0.7)], hand };
+}
+/**
+ * How far to extend (0 bent .. 1 straight) for `f`'s point to just reach `p` and press a couple of centimetres into
+ * it. At close range a straight arm is longer than the distance, and the point slides past instead of landing: a
+ * riposte or an attack from close is made with the arm only as long as it needs to be. (Below 0: too close even bent.)
+ */
+export function reachFor(f: Fencer, p: V): number {
+  const need = len(sub(p, f.shoulder)) - f.weapon.blade * 0.985 + 0.025;
+  // (the guard's distance from the shoulder runs from about 0.43 m bent to 0.6 m straight: see guardFor)
+  return (need - 0.43) / 0.17;
 }
 const toLocalDir = (F: Frame, d: V): V => [dot(d, F.f), dot(d, F.u), dot(d, F.r)];
 

@@ -25,13 +25,19 @@ export type BoutEvent =
   | { type: 'light'; t: number; who: 0 | 1; light: Light }
   | { type: 'halt'; t: number; call: string; points: [number, number] }
   | { type: 'allez'; t: number }
-  | { type: 'over'; t: number; winner: 0 | 1 };
+  | { type: 'over'; t: number; winner: 0 | 1 }
+  | { type: 'time'; t: number }
+  | { type: 'priority'; t: number; who: 0 | 1 };
 
 export interface Options {
   weapon: Weapon; to: number;
   /** a referee (allez, halt, the score, en garde). Without one (a lesson), whoever runs the bout places the fencers and
    * reads the box, and the bout is always fencing. */
   referee?: boolean;
+  /** the bout's time, s (three minutes); then, level, a priority minute */
+  time?: number;
+  /** for drawing priority, if it comes to that */
+  seed?: number;
 }
 
 export class Bout {
@@ -52,6 +58,11 @@ export class Bout {
   n = 0;
   /** when the blades were last touching, s */
   lastTouch = -9;
+  /** fencing time left, s (it runs only while they're fencing) */
+  clock: number;
+  /** the priority minute: who has priority (they win if it runs out level) */
+  priority: 0 | 1 | null = null;
+  private timeUp = false;
   /** the hardest each tip pressed since the fencers were placed or `resetPeak`, N (a press too brief or too light to
    * register still shows) */
   peak: [number, number] = [0, 0];
@@ -65,6 +76,7 @@ export class Bout {
     this.box = new Box(opts.weapon);
     this.pair = new BladePair(this.fencers[0].blade, this.fencers[1].blade);
     if (opts.referee === false) this.phase = 'fence';
+    this.clock = opts.time ?? 180;
   }
 
   /** run on by dt (real seconds); returns how many substeps ran */
@@ -131,6 +143,8 @@ export class Bout {
     const since = this.t - this.phaseAt;
     if (this.phase === 'ready' && since > 0.9) this.go('fence', () => this.events.push({ type: 'allez', t: this.t }));
     if (this.phase === 'fence') {
+      this.clock -= H;
+      if (this.clock <= 0 && this.box.first === null) { this.clock = 0; this.timeUp = true; this.call = 'time'; this.events.push({ type: 'time', t: this.t }); this.go('halt'); return; }
       if (this.box.first !== null) this.go('halt');
       // (both feet over the end of the piste behind you: a touch against)
       for (const i of [0, 1] as const) {
@@ -143,18 +157,29 @@ export class Bout {
         }
       }
     }
-    if (this.phase === 'halt' && this.box.locked(this.t) && since > 1.4) {
+    if (this.phase === 'halt' && since > 1.4 && (this.box.locked(this.t) || (this.timeUp && this.box.first === null))) {
       let { points, call } = award(this.opts.weapon, this.box.lights);
-      // (a double at one touch from the end, both level, counts for nobody: they fence for the last touch)
+      // (a double at one touch from the end, both level, counts for nobody: they fence for the last touch; nor in the
+      // priority minute, where the first touch alone wins)
       const last = this.opts.to - 1;
-      if (points[0] && points[1] && this.score[0] === last && this.score[1] === last) { points = [0, 0]; call = 'coup double: annulled'; }
+      if (points[0] && points[1] && ((this.score[0] === last && this.score[1] === last) || this.priority !== null)) { points = [0, 0]; call = 'coup double: annulled'; }
       this.score = [this.score[0] + points[0], this.score[1] + points[1]];
       this.call = this.call || call;
       this.events.push({ type: 'halt', t: this.t, call: this.call, points });
-      if (this.score[0] >= this.opts.to || this.score[1] >= this.opts.to) {
-        this.go('over');
-        this.events.push({ type: 'over', t: this.t, winner: this.score[0] > this.score[1] ? 0 : 1 });
-      } else this.enGarde();
+      const [a, b] = this.score, timeUp = this.timeUp;
+      this.timeUp = false;
+      let winner: 0 | 1 | null = null;
+      if (a >= this.opts.to || b >= this.opts.to || (this.priority !== null && a !== b)) winner = a > b ? 0 : 1;
+      else if (timeUp && a !== b) winner = a > b ? 0 : 1;
+      else if (timeUp && this.priority !== null) winner = this.priority;
+      else if (timeUp) {
+        // level at time: a minute more, and priority drawn by lot (it wins if the minute runs out level)
+        this.priority = ((this.opts.seed ?? 1) * 2654435761 >>> 0) % 2 === 0 ? 0 : 1;
+        this.clock = 60;
+        this.events.push({ type: 'priority', t: this.t, who: this.priority });
+      }
+      if (winner !== null) { this.go('over'); this.events.push({ type: 'over', t: this.t, winner }); }
+      else this.enGarde();
     }
   }
 
@@ -179,7 +204,7 @@ export class Bout {
     this.phase = 'fence'; this.phaseAt = this.t;
     this.events.push({ type: 'reset', t: this.t });
   }
-  restart() { this.score = [0, 0]; this.enGarde(); }
+  restart() { this.score = [0, 0]; this.clock = this.opts.time ?? 180; this.priority = null; this.timeUp = false; this.enGarde(); }
 
   private go(p: Phase, then?: () => void) { this.phase = p; this.phaseAt = this.t; then?.(); }
 
@@ -190,6 +215,9 @@ export class Bout {
     A.s += gap / 2; B.s -= gap / 2;
     A.pose(); B.pose();
   }
+
+  /** when the blades (or a blade and a bell) last met, s: a fencer feels it at once */
+  get lastContact() { return Math.max(this.lastTouch, this.bellAt[0], this.bellAt[1]); }
 
   /** the distance between the fencers' fronts, m */
   get gap() { return this.fencers[1].reachFront - this.fencers[0].reachFront; }

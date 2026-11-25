@@ -18,6 +18,12 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 #lampThem.on{background:var(--them);box-shadow:0 0 28px var(--them)}
 #top i.off{background:#fff;box-shadow:0 0 24px #fff}
 #score{font-size:22px;letter-spacing:.12em;font-variant-numeric:tabular-nums;min-width:4.5em;text-align:center}
+#clock{position:fixed;top:calc(max(12px,env(safe-area-inset-top)) + 44px);left:0;right:0;text-align:center;font:11px ui-monospace,Menlo,monospace;letter-spacing:.12em;opacity:.7;pointer-events:none}
+/* your arm: a thin bar that fills as it tires (held out straight it tires in seconds; bend it to rest) */
+#arm{position:fixed;left:max(14px,env(safe-area-inset-left));bottom:calc(max(12px,env(safe-area-inset-bottom)) + 10px);width:84px;pointer-events:none;opacity:0;transition:opacity .4s;font-size:9px;letter-spacing:.24em;text-transform:uppercase}
+#arm.on{opacity:.85}
+#arm i{display:block;height:4px;margin-top:5px;border-radius:2px;background:linear-gradient(90deg,#ffd27a calc(var(--f,0)*100%),#ffffff26 calc(var(--f,0)*100%))}
+.lesson #clock,.menu #clock,.menu #arm,.preview #clock,.preview #arm,.replaying #arm{display:none}
 #labels{position:fixed;top:calc(max(12px,env(safe-area-inset-top)) + 28px);left:0;right:0;display:flex;justify-content:center;gap:120px;font-size:9px;letter-spacing:.3em;text-transform:uppercase;opacity:.55;pointer-events:none}
 #mid{position:fixed;left:0;right:0;top:24%;text-align:center;pointer-events:none}
 #say{font-size:clamp(30px,9vw,60px);letter-spacing:.18em;text-indent:.18em;text-transform:uppercase;font-weight:300}
@@ -82,6 +88,8 @@ body:not(.menu) #menu{display:none}
 <div id="marks"><div id="markR" hidden></div><div id="markRdot" hidden></div><div id="markL" hidden></div><div id="markLdot" hidden></div></div>
 <div id="top"><i id="lampThem"></i><div id="score">0 · 0</div><i id="lampYou"></i></div>
 <div id="labels"><span>them</span><span>you</span></div>
+<div id="clock"></div>
+<div id="arm">arm<i></i></div>
 <div id="mid" role="status"><div id="say"></div><div id="sub"></div></div>
 <div id="hint">left thumb: up to extend, further to lunge · tap to advance · down to retreat<br>right thumb: across to parry · up and down for the point</div>
 <div id="lesson"><div id="lTitle"></div><div id="lPrompt"></div><div id="lMeta"><span id="lDots"></span><span id="lPace"></span></div></div>

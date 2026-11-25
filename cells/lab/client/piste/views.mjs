@@ -16,7 +16,7 @@ export const views = [
     run: async (v) => { await until(v, () => window.__piste.replaying, 240000); await v.wait(2500); } },
   { name: 'mask', group: 'The bout', title: 'En garde, through the mask', caption: 'at the lines, before allez: their point toward you, your own bell low on the right', query: 't=0.5&still', size: PHONE, settle: 1200 },
   { name: 'close', group: 'The bout', title: 'In distance', caption: 'a riposte coming: their bell turned toward your blade, your blade crossing theirs', query: 'auto&t=2.6&still', size: PHONE, settle: 1200 },
-  { name: 'wrist', group: 'The bout', title: 'Touched on the wrist', caption: 'they lunged as you came forward, at the nearest target: your arm. Their lamp is lit', query: 'auto&t=2.93&still', size: PHONE, settle: 1200 },
-  { name: 'double', group: 'The bout', title: 'Coup double, from the side', caption: 'both tips home inside the 45 ms: both blades bowed against the chests, both lamps lit', query: 'auto&view=side&t=11.97&still', size: WIDE, settle: 1200 },
+  { name: 'wrist', group: 'The bout', title: 'Touched on the arm', caption: 'your bell covered your chest, so they went for what it didn\'t: your arm. Their lamp is lit', query: 'auto&t=6.43&still', size: PHONE, settle: 1200 },
+  { name: 'double', group: 'The bout', title: 'A touch, from the side', caption: 'the lunge home, the blade bowed against the chest, your lamp lit; the clock under the score', query: 'auto&view=side&t=12.27&still', size: WIDE, settle: 1200 },
   { name: 'readout', group: 'The bout', title: 'What the box hears', caption: 'the readout: the gap, each tip\'s force against its 7.35 N, how far each blade is bowed, how hard each hand is working, what the opponent is doing', query: 'auto&view=side&readout&t=5.2&still', size: WIDE, settle: 1500 },
 ];
