@@ -62,6 +62,9 @@ export const WRIST = { back: 0.14, top: 0.02 };
 /** where on the torso it aims, from the pelvis (0) to the top of the chest (1) */
 export const TORSO_AT = 0.62;
 
+/** how far its arm is out when it's only watching (below where an arm starts to tire) */
+export const CARRIAGE = 0.45;
+
 export const BEAT = { time: 0.3, hand: 0.34, point: 0.3, hold: -0.06 };
 
 export type Tactic = 'measure' | 'attack' | 'recover' | 'parry' | 'riposte' | 'beat' | 'take' | 'wait' | 'draw';
@@ -121,7 +124,8 @@ export class Opponent implements Controller {
     if (!this.counted && see.t > this.stepAt && see.t - this.stepAt < 0.45 && see.ext - this.extAtStep > 0.4) { this.stopHits++; this.counted = true; }
     switch (this.tactic) {
       case 'measure': {
-        I.lunge = false; I.extend = 0.12;
+        // (a modern épée carriage: the arm well forward, the point toward their chest, short of a line (it doesn't tire))
+        I.lunge = false; I.extend = CARRIAGE;
         this.inLine(I, this.target(o, 'torso'));
         if (threatened && this.rnd() < this.style.parry) { this.begin('parry'); this.side = this.sideOf(see.tip); break; }
         if (respect) {
@@ -192,7 +196,7 @@ export class Opponent implements Controller {
       }
       case 'wait': {
         // out of reach, point in its own line, until their arm comes down: then at once
-        I.extend = 0.15; I.lunge = false;
+        I.extend = CARRIAGE; I.lunge = false;
         this.inLine(I, this.target(o, 'torso'));
         if (canStep && see.dChest < 0.95) step('retreat');
         if (see.ext < 0.5) {
