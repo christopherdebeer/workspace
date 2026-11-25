@@ -39,7 +39,7 @@ const assist = preview ? 0 : qs.has('assist') ? clamp(Number(qs.get('assist')) |
  * The study: five seconds in the room, nearly uneventful, to judge the look by: the opponent takes one step closer, you
  * roll your wrist a little, both settle (and again). Can you feel how much distance closed, and see what your hand did?
  */
-const study = qs.has('study');
+const study = qs.has('study'), clothStudy = qs.get('study') === 'cloth';
 /** look flags: the figures as plain grey models; the contact capsules over them */
 const clay = qs.has('clay'), bodies = qs.has('bodies');
 const replays = !preview && !study && qs.get('replay') !== '0';
@@ -48,7 +48,7 @@ const body = document.body;
 body.classList.add(mode);
 if (study) body.classList.add('study');
 if (preview) body.classList.add('preview');
-if (qs.get('mask') === '0' || viewMode !== 'mask') body.classList.add('nomask');
+if (clothStudy || qs.get('mask') === '0' || viewMode !== 'mask') body.classList.add('nomask');
 if (readout) body.classList.add('readout');
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -64,6 +64,11 @@ const studyYou: Controller = { intent: () => {
 let studyLap = 0, studyStepped = -1;
 const studyThem: Controller = { intent: () => {
   const lap = Math.floor(bout.t / STUDY.loop), t = studyClock();
+  if (clothStudy) {
+    // One second to extend, a full second under tension, then a slow release.
+    const phase = clamp(Math.min(t - 0.75, (4.5 - t) / 1.5), 0, 1);
+    return { ...idle(), extend: 0.05 + 0.94 * phase * phase * (3 - 2 * phase) };
+  }
   // (each lap from the en garde lines again)
   if (lap !== studyLap) { studyLap = lap; bout.place(3.32); }
   const I = { ...idle(), extend: 0.12 };
@@ -102,6 +107,14 @@ const fovOf = () => {
 };
 function view(b: Bout): View {
   const [me, op] = b.fencers, fov = fovOf();
+  if (clothStudy) {
+    const at = madd(op.frame.o, op.frame.f, 0.20);
+    at[1] = 1.24;
+    const eye = madd(madd(at, op.frame.f, 0.72), op.frame.r, 1.48);
+    eye[1] = 1.46;
+    const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
+    return { eye, at, fov: clamp(2 * Math.atan(0.34 / aspect), 0.60, 1.14), self: -1 };
+  }
   if (viewMode === 'side') {
     const mid = (me.s + op.s) / 2;
     // (from under the windows, the dark wall behind them: the room is 7.2 m across)
