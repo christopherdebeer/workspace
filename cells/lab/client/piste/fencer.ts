@@ -47,7 +47,7 @@ export class Fencer {
   frame!: Frame;
   /** the body this step, for the blade to meet and the eye to draw */
   capsules: Capsule[] = [];
-  shoulder: V = [0, 0, 0]; elbow: V = [0, 0, 0]; hand: V = [0, 0, 0];
+  shoulder: V = [0, 0, 0]; elbow: V = [0, 0, 0]; elbowLook: V = [0, 0, 0]; hand: V = [0, 0, 0];
   eye: V = [0, 0, 0];
   /**
    * How tired the weapon arm is, 0..1. An arm held out at shoulder height with a weapon at the end of it tires in
@@ -144,6 +144,9 @@ export class Fencer {
     const P = this.blade ? this.blade.pommel : this.shoulder, G = this.blade ? this.blade.guard : this.shoulder;
     this.hand = this.blade ? madd(G, norm(sub(P, G)), BODY.gripToGuard) : this.shoulder;
     this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.4), [0, -1, 0]));
+    // (the elbow as it's drawn: tucked under the forearm, as an arm carried forward holds it. The body the blades meet
+    // keeps the elbow above, which the lessons are tuned to)
+    this.elbowLook = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.2), [0, -1, 0]));
     // the rear arm, relaxed, low and a little back (the modern épée carriage: no raised arm); in a lunge it swings back
     // and straightens, for balance
     const rearElbow = toWorld(F, hipsFwd - 0.12 - 0.12 * L, hipsUp + 0.26 - 0.06 * L, -0.2);
