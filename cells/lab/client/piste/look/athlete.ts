@@ -21,8 +21,8 @@ import { EPEE } from '../weapons';
 import { type V, add, cross, dot, len, lerp, madd, norm, scale, sub } from '../v3';
 import { MAT, type C } from './mesh';
 
-/** floats a vertex: place, normal, colour + material, fabric uv, four joints, four weights, (hem, sleeve, gather, part) */
-export const SKIN_STRIDE = 26;
+/** floats a vertex: place, normal, colour + material, fabric uv, four joints, four weights, (hem, sleeve, gather, part), atlas uv, fold position delta + driver, fold normal delta */
+export const SKIN_STRIDE = 33;
 export const BONES = 15;
 export const B = { pelvis: 0, chest: 1, head: 2, upperW: 3, foreW: 4, handW: 5, upperR: 6, foreR: 7, handR: 8, thighF: 9, shinF: 10, footF: 11, thighB: 12, shinB: 13, footB: 14 } as const;
 /** parts, for what the eye inside the mask doesn't see of its own body (a bit each in the `hide` mask) */
@@ -88,10 +88,10 @@ type W = [number, number][];
 class SkinMesh {
   v: number[] = []; i: number[] = [];
   get n() { return this.v.length / SKIN_STRIDE; }
-  vert(p: V, nr: V, col: C, mat: number, uv: [number, number], w: W, extra: [number, number, number, number], atlas: [number, number] = [-1,-1]): number {
+  vert(p: V, nr: V, col: C, mat: number, uv: [number, number], w: W, extra: [number, number, number, number], atlas: [number, number] = [-1,-1], fold: V = [0,0,0], normalChange: V = [0,0,0], driver = 0): number {
     const ws = [...w].sort((a, b) => b[1] - a[1]).slice(0, 4), tot = ws.reduce((s, x) => s + x[1], 0) || 1;
     while (ws.length < 4) ws.push([0, 0]);
-    this.v.push(...p, ...nr, ...col, mat, ...uv, ...ws.map((x) => x[0]), ...ws.map((x) => x[1] / tot), ...extra, ...atlas);
+    this.v.push(...p, ...nr, ...col, mat, ...uv, ...ws.map((x) => x[0]), ...ws.map((x) => x[1] / tot), ...extra, ...atlas, ...fold, driver, ...normalChange);
     return this.n - 1;
   }
   tri(a: number, b: number, c: number) { this.i.push(a, b, c); }
@@ -103,6 +103,7 @@ interface LoftOpt {
   weights: (i: number, j: number, p: V) => W; extra?: (i: number, j: number, p: V) => [number, number, number, number];
   /** fabric: (circumference uv, along uv, distance to a seam) are worked out from the shape */
   fit?: (p: V) => V;
+  fold?: { driver: number; relief: (row: number, angle: number, radial: V) => number };
   panel?: number;
   panelUV?: (i: number, j: number, p: V) => [number, number];
   seams?: number[]; tone?: number; capA?: boolean; capB?: boolean;
@@ -122,6 +123,12 @@ function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
   }));
   const R = rings.length;
   const nb = (j: number) => open ? [Math.max(0, j - 1), Math.min(J - 1, j + 1)] : [(j + S - 1) % S, (j + 1) % S];
+  // A second cut of the same panel supplies displacement AND the changing normal.
+  // The UVs and stitching remain attached to the material throughout the bend.
+  const folded = o.fold && P.map((ring,i) => ring.map((p,j) => {
+    const radial = norm(sub(p,rings[i].c));
+    return madd(p,radial,o.fold!.relief(i/(R-1),ang(j),radial));
+  }));
   let along = 0;
   const base = m.n;
   for (let i = 0; i < R; i++) {
@@ -151,7 +158,17 @@ function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
         ((panel%2) + 0.02 + coord[0]*0.96)*0.25 + (panel>=4 ? 0.5 : 0),
         (Math.floor(panel%4/2) + 0.02 + coord[1]*0.96)*0.25,
       ];
-      m.vert(p, nr, col, mat, uv, o.weights(i, j, p), o.extra ? o.extra(i, j, p) : [0, 0, 0, 0], atlas);
+      let displacement: V = [0,0,0], normalChange: V = [0,0,0];
+      if (folded) {
+        const q = folded[i][j];
+        const across = sub(folded[i][j1], folded[i][j0]);
+        const lengthwise = sub(folded[Math.min(R-1,i+1)][j], folded[Math.max(0,i-1)][j]);
+        let bentNormal = norm(cross(lengthwise,across));
+        if (dot(bentNormal,sub(q,rings[i].c)) < 0) bentNormal = scale(bentNormal,-1);
+        displacement = sub(q,p);
+        normalChange = sub(bentNormal,nr);
+      }
+      m.vert(p, nr, col, mat, uv, o.weights(i, j, p), o.extra ? o.extra(i, j, p) : [0, 0, 0, 0], atlas, displacement, normalChange, o.fold?.driver ?? 0);
     }
   }
   for (let i = 0; i < R - 1; i++) for (let j = 0; j < S; j++) {
@@ -258,6 +275,11 @@ export function buildAthlete(): Athlete {
     }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) + 0.013*Math.cos(a)*Math.exp(-(((h-0.43)/0.095)**2)) };
   });
   loft(m, torsoRings, {
+    fold: { driver: 4, relief: (row,a) => {
+      const front = 0.5-0.5*Math.sin(a);
+      return front*(0.012*pleat(row,0.50+0.16*Math.cos(a),0.035)
+        - 0.009*pleat(row,0.39+0.10*Math.cos(a),0.045));
+    } },
     fit: fitShoulder, panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
     weights: (i, j, p) => {
       const h = p[1] - hy, k = blend(h, 0.18, 0.4);
@@ -294,6 +316,12 @@ export function buildAthlete(): Athlete {
     // the inside of the elbow (toward the chord from shoulder to wrist) gathers as it bends
     const E = pts[1], inner = norm(sub(lerp(pts[0], pts[2], 0.5), E));
     loft(m, rings, {
+      fold: { driver: armSign > 0 ? 0 : 1, relief: (row,a,radial) => {
+        const compression = 0.12 + 0.88 * smooth((1 + dot(radial,inner)) * 0.5);
+        // Two oblique gathers form at the inside elbow and flatten across the outside.
+        return compression*(0.014*pleat(row,sE-0.13+0.045*Math.sin(a),0.031)
+          + 0.011*pleat(row,sE+0.055-0.041*Math.cos(a),0.027));
+      } },
       fit: fitShoulder, panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
       weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.40 * (1 - smooth(blend(s, 0, 0.16))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
       extra: (i, j, p) => {
@@ -341,7 +369,11 @@ export function buildAthlete(): Athlete {
     for (let i = 0; i < N; i++) { const s = (i / (N - 1)) * band; add1(s, TONE.breeches); }
     const leg1 = rings.splice(0), tone1 = tones.splice(0); mats.splice(0);
     const wts = (s: number): W => { const k = blend(s, sK - 0.06, sK + 0.06), hipK = 1 - blend(s, 0, 0.14); return [[th === 9 ? B.thighF : B.thighB, (1 - k) * (1 - hipK * 0.5)], [sh === 10 ? B.shinF : B.shinB, k], [B.pelvis, (1 - k) * hipK * 0.5]]; };
-    loft(m, leg1, { panel: 2, seg: 32, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
+    loft(m, leg1, { fold: { driver: th === 9 ? 2 : 3, relief: (row,a) => {
+      const slack = 0.5-0.5*Math.cos(a);
+      return slack*(0.013*pleat(row,0.78+0.06*Math.sin(a),0.045)
+        + 0.009*pleat(row,0.88-0.025*Math.sin(a),0.03));
+    } }, panel: 2, seg: 32, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
     // the band: a narrow cuff, a little proud
     const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.07, 0.067] }; });
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
@@ -577,6 +609,7 @@ export class Secondary {
   private last: V[] = []; private vel: V[] = []; private t = -1;
   update(f: Fencer, t: number) {
     const pts: V[] = [f.capsules[0].a, lerp(f.elbow, f.hand, 0.5), lerp(f.capsules[8].a, f.capsules[8].b, 0.5)];
+    if (t === this.t) return; // A held frame keeps its spring state.
     const dt = t - this.t;
     if (this.t < 0 || dt <= 0 || dt > 0.3 || len(sub(pts[0], this.last[0] ?? pts[0])) > 0.35) {
       this.last = pts; this.vel = pts.map(() => [0, 0, 0] as V); this.t = t;

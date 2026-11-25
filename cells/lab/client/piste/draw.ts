@@ -92,8 +92,8 @@ export class Renderer {
     }
     gl.activeTexture(gl.TEXTURE0);
     this.skinShade = program(gl, SKIN_SHADOW_VS, SHADOW_FS);
-    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend']) this.uk[k] = gl.getUniformLocation(this.skin, k);
-    for (const k of ['lvp', 'bones', 'hem']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uk[k] = gl.getUniformLocation(this.skin, k);
+    for (const k of ['lvp', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
     this.athlete = buildAthlete();
     this.skinVao = gl.createVertexArray()!;
     gl.bindVertexArray(this.skinVao);
@@ -117,7 +117,7 @@ export class Renderer {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(eyeIndices), gl.STATIC_DRAW);
     const ib = this.fullIndex = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.athlete.index, gl.STATIC_DRAW);
     const st = SKIN_STRIDE * 4;
-    [[0, 3, 0], [1, 3, 12], [2, 4, 24], [3, 2, 40], [4, 4, 48], [5, 4, 64], [6, 4, 80], [7, 2, 96]].forEach(([l, n, o]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, st, o); });
+    [[0, 3, 0], [1, 3, 12], [2, 4, 24], [3, 2, 40], [4, 4, 48], [5, 4, 64], [6, 4, 80], [7, 2, 96], [8, 4, 104], [9, 3, 120]].forEach(([l, n, o]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, st, o); });
     gl.bindVertexArray(null);
     this.us.lvp = gl.getUniformLocation(this.shade, 'lvp');
     const room = buildSalle();
@@ -184,7 +184,7 @@ export class Renderer {
     gl.uniformMatrix4fv(this.uks.lvp, false, lvp);
     gl.bindVertexArray(this.skinVao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.fullIndex);
-    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); gl.uniform3fv(this.uks.hem, ps.hem); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
+    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); this.clothUniforms(this.uks,ps); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -225,7 +225,7 @@ export class Renderer {
     gl.bindVertexArray(this.skinVao);
     poses.forEach((ps, i) => {
       gl.uniformMatrix4fv(U.bones, false, this.bones[i]);
-      gl.uniform3fv(U.hem, ps.hem); gl.uniform3fv(U.sleeveW, ps.sleeve[0]); gl.uniform3fv(U.sleeveR, ps.sleeve[1]); gl.uniform2fv(U.bend, ps.bend);
+      this.clothUniforms(U,ps);
       // The first-person sleeve continues through the elbow to the edge of the frame.
       const firstPerson = i === view.self;
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, firstPerson ? this.eyeIndex : this.fullIndex);
@@ -254,7 +254,16 @@ export class Renderer {
     if (!sec) { sec = new Secondary(); this.secondary.set(f, sec); }
     sec.update(f, t);
     const c = f.capsules;
-    return { hem: sec.hem, sleeve: sec.sleeve, bend: [bendOf(f.shoulder, f.elbow, f.hand), bendOf(c[7].a, c[7].b, c[8].b)] };
+    const bend = [bendOf(f.shoulder,f.elbow,f.hand), bendOf(c[7].a,c[7].b,c[8].b)];
+    const knees = [bendOf(c[9].a,c[9].b,c[10].b), bendOf(c[11].a,c[11].b,c[12].b)];
+    return { hem: sec.hem, sleeve: sec.sleeve, bend, load: [...bend,...knees,1-bend[0]] };
+  }
+
+  private clothUniforms(u: Record<string,WebGLUniformLocation|null>, p: ReturnType<Renderer['pose']>) {
+    const gl = this.gl;
+    gl.uniform3fv(u.hem,p.hem);
+    gl.uniform3fv(u.sleeveW,p.sleeve[0]); gl.uniform3fv(u.sleeveR,p.sleeve[1]);
+    gl.uniform2fv(u.bend,p.bend); gl.uniform1fv(u.foldLoad,p.load);
   }
 }
 
@@ -294,3 +303,4 @@ function mul(a: Float32Array, b: Float32Array): Float32Array {
   for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; }
   return o;
 }
+

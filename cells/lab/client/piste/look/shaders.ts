@@ -275,27 +275,42 @@ precision mediump float; out vec4 o; void main(){ o = vec4(1.0); }`;
 
 /** the athlete, skinned: four joints a vertex; the inside of each elbow gathered as it bends; the hem and sleeves
  * moved by their springs; parts the eye inside the mask doesn't see of its own body sent off screen */
+const FOLD_INPUTS = `
+layout(location=8) in vec4 foldDelta;
+layout(location=9) in vec3 foldNormal;
+uniform float foldLoad[5];
+uniform vec3 hem, sleeveW, sleeveR;
+uniform vec2 bend;
+vec3 dressedPosition(mat4 skin, float load, vec3 normal) {
+  vec3 world = (skin * vec4(p + load*foldDelta.xyz,1.0)).xyz;
+  float gather = ex.z > 0.0 ? ex.z*bend.x : -ex.z*bend.y;
+  return world + hem*ex.x + (ex.y > 0.0 ? sleeveW*ex.y : sleeveR*(-ex.y)) - 0.012*gather*normal;
+}`;
+
 export const SKIN_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
 layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex; layout(location=7) in vec2 panelUV;
 uniform mat4 vp; uniform mat4 lvp; uniform mat4 bones[15];
-uniform vec3 hem; uniform vec3 sleeveW; uniform vec3 sleeveR; uniform vec2 bend; 
+${FOLD_INPUTS}
 out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas;
 void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
-  vec3 q = (M * vec4(p, 1.0)).xyz, nn = normalize(mat3(M) * n);
-  q += hem * ex.x + (ex.y > 0.0 ? sleeveW * ex.y : sleeveR * -ex.y);
+  float load = foldLoad[int(foldDelta.w)];
+  vec3 nn = normalize(mat3(M) * (n + load*foldNormal));
+  vec3 q = dressedPosition(M,load,nn);
   float g = ex.z > 0.0 ? ex.z * bend.x : -ex.z * bend.y;
-  q -= nn * g * 0.012;
   vC = c.rgb; if (c.a > 14.5 && c.a < 15.5) vC.r *= 1.0 - 0.38 * g;
   vP = q; vN = nn; vM = c.a; vT = t; vAtlas = panelUV; vL = lvp * vec4(q, 1.0);
   gl_Position = vp * vec4(q, 1.0);
 }`;
 export const SKIN_SHADOW_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex;
-uniform mat4 lvp; uniform mat4 bones[15]; uniform vec3 hem;
+layout(location=1) in vec3 n; uniform mat4 lvp; uniform mat4 bones[15];
+${FOLD_INPUTS}
 void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
-  gl_Position = lvp * vec4((M * vec4(p, 1.0)).xyz + hem * ex.x, 1.0);
+  float load = foldLoad[int(foldDelta.w)];
+  vec3 nn = normalize(mat3(M)*(n + load*foldNormal));
+  gl_Position = lvp * vec4(dressedPosition(M,load,nn),1.0);
 }`;
 
