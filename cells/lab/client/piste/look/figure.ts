@@ -37,7 +37,7 @@ export function weapon(m: Mesh, f: Fencer, seed: number) {
   const r = b.weapon.guardR, h = b.weapon.guardDepth, R = (r * r + h * h) / (2 * h), th0 = Math.asin(Math.min(1, r / R));
   const off = add(scale(thumb, -0.016), scale(side, -0.009));
   const apex = add(G, off), C0 = madd(apex, ax, -R);
-  const seg = 20, rings = 6;
+  const seg = 36, rings = 6;
   const pt = (i: number, j: number) => {
     const t = (i / rings) * th0, p = (j / seg) * Math.PI * 2;
     const d = norm(add(scale(ax, Math.cos(t)), add(scale(thumb, Math.sin(t) * Math.cos(p)), scale(side, Math.sin(t) * Math.sin(p)))));
@@ -71,7 +71,7 @@ export function weapon(m: Mesh, f: Fencer, seed: number) {
   const sec: { A: V; B: V; Cc: V; up: V; sd: V }[] = [];
   for (let i = 1; i < n; i++) {
     const p = b.at(i), t = norm(sub(b.at(Math.min(i + 1, n - 1)), b.at(Math.max(i - 1, 1)))), up = perp(thumb, t), sd = cross(t, up);
-    const rr2 = b.r[i] * 1.45, wd = rr2 * 2.5, ht = rr2 * 2.1;
+    const rr2 = b.r[i], wd = rr2 * 1.65, ht = rr2 * 1.25;
     sec.push({ A: add(madd(p, up, ht * 0.33), scale(sd, -wd / 2)), B: add(madd(p, up, ht * 0.33), scale(sd, wd / 2)), Cc: madd(p, up, -ht * 0.67), up, sd });
   }
   const face = (k: 'A' | 'B' | 'Cc', l: 'A' | 'B' | 'Cc') => {
@@ -84,6 +84,6 @@ export function weapon(m: Mesh, f: Fencer, seed: number) {
   };
   face('B', 'A'); face('A', 'Cc'); face('Cc', 'B');
   // the button: a barrel at the tip, darker, a bright ring where it seats
-  const tip = b.tip, td = b.tipAxis, [tu, tw] = around(td, thumb), rb = b.r[n - 1] * 2.1;
+  const tip = b.tip, td = b.tipAxis, [tu, tw] = around(td, thumb), rb = b.r[n - 1] * 1.15;
   m.tube([{ c: madd(tip, td, -0.014), u: tu, w: tw, ru: rb * 0.9, rw: rb * 0.9 }, { c: madd(tip, td, -0.011), u: tu, w: tw, ru: rb, rw: rb }, { c: madd(tip, td, 0.004), u: tu, w: tw, ru: rb * 0.95, rw: rb * 0.95 }], 8, KIT.button, MAT.button, { capB: true });
 }

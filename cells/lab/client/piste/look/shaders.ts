@@ -20,19 +20,19 @@ const R = ROOM;
 export const MAIN_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
 uniform mat4 vp; uniform mat4 lvp;
-out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT;
-void main(){ vP = p; vN = n; vC = c.rgb; vM = c.a; vT = t; vL = lvp * vec4(p, 1.0); gl_Position = vp * vec4(p, 1.0); }`;
+out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas;
+void main(){ vP = p; vN = n; vC = c.rgb; vM = c.a; vT = t; vAtlas = vec2(-1.0); vL = lvp * vec4(p, 1.0); gl_Position = vp * vec4(p, 1.0); }`;
 
 export const MAIN_FS = `#version 300 es
 precision highp float;
 precision highp sampler2DShadow;
-in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL; in vec2 vT;
+in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL; in vec2 vT; in vec2 vAtlas; uniform sampler2D kitAtlas;
 uniform vec3 eye; uniform vec3 sunDir; uniform sampler2DShadow shadow; uniform float exposure; uniform float clay; uniform float alpha;
 uniform vec4 feet[4]; uniform vec4 tips[2]; uniform vec3 bladeA[2]; uniform vec3 bladeB[2];
 out vec4 o;
 
 const vec3 LO = vec3(${f(R.x0)}, 0.0, ${f(R.z0)}), HI = vec3(${f(R.x1)}, ${f(R.h)}, ${f(R.z1)});
-const vec3 SUN = vec3(1.0, 0.86, 0.68) * 1.6;
+const vec3 SUN = vec3(1.0, 0.94, 0.85) * 0.41;
 const vec3 SKY = vec3(0.78, 0.86, 1.0);
 const vec3 HAZE = vec3(0.52, 0.55, 0.6);
 
@@ -86,7 +86,9 @@ vec3 roomSoft(vec3 d){
 float sunThrough(vec3 p){
   if (sunDir.z >= 0.0) return 0.0;
   float t = (LO.z - p.z) / sunDir.z; vec3 h = p + sunDir * t;
-  return pane(h.x, h.y);
+  // The window is a broad daylight source. Average neighboring paths to soften its projected mullions.
+  return 0.32 * pane(h.x,h.y) + 0.17 * (pane(h.x+0.14,h.y+0.075) + pane(h.x-0.14,h.y-0.075)
+       + pane(h.x+0.06,h.y-0.14) + pane(h.x-0.06,h.y+0.14));
 }
 float shadowAt(){
   vec3 q = vL.xyz / vL.w * 0.5 + 0.5;
@@ -125,26 +127,50 @@ void main(){
   else if (M == 1) { metal = 1.0; rough = 0.05; }
   else if (M == 2) { metal = 1.0; rough = 0.04; }
   else if (M == 12) { metal = 1.0; rough = 0.2; }
+  else if (M == 5) {
+    vec2 wall = vec2(abs(N.x) > 0.5 ? vP.z : vP.x, vP.y);
+    alb *= 0.94 + 0.07*vnoise(wall*1.7) + 0.022*vnoise(wall*39.0);
+  }
   else if (M == 3) { // the piste: brushed steel plates, dull
     float br = vnoise(vec2(vP.x * 3.0, vP.z * 160.0)) * 0.5 + vnoise(vec2(vP.x * 0.7, vP.z * 9.0)) * 0.5;
-    float seam = smoothstep(0.006, 0.0, abs(mod(vP.x, 1.5) - 0.75) - 0.744);
-    alb *= 0.86 + 0.22 * br; alb *= 1.0 - 0.5 * seam; metal = 0.35; rough = 0.5 + 0.15 * br;
+    float seam = 1.0 - smoothstep(0.0, 0.006 + fwidth(vP.x), abs(fract(vP.x / 1.5 + 0.5) - 0.5)*1.5);
+    alb *= 0.86 + 0.22 * br; alb *= 1.0 - 0.25 * seam; metal = 0.35; rough = 0.5 + 0.15 * br;
   }
   else if (M == 4) { // the floor: boards along the room
     float pl = floor(vP.z / 0.14), gr = vnoise(vec2(vP.x * 1.4 + pl * 17.0, pl * 3.1));
-    alb *= 0.78 + 0.35 * hash(vec2(pl, floor(vP.x / 2.3 + pl))) * 0.6 + 0.15 * gr;
-    alb *= 1.0 - 0.35 * smoothstep(0.004, 0.0, abs(fract(vP.z / 0.14) - 0.5) - 0.495);
+    alb *= 0.89 + 0.12 * hash(vec2(pl, floor(vP.x / 2.3 + pl))) * 0.6 + 0.15 * gr;
+    alb *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.002, abs(fract(vP.z / 0.14 + 0.5) - 0.5)*0.14));
     rough = 0.55; spec = 0.05;
+  }
+  else if (M == 17) {
+    vec2 wallUV = vec2((vP.z-LO.z)/(HI.z-LO.z), 1.0-vP.y/HI.y);
+    if (N.x > 0.0) wallUV.x = 1.0-wallUV.x;
+    vec3 paint = texture(kitAtlas,vec2(wallUV.x, 0.503+0.494*wallUV.y)).rgb;
+    alb = pow(paint,vec3(2.2))*0.88;
+    rough = 0.96; spec = 0.016;
+  }
+  else if (M == 16) {
+    // The low-frequency darkness of the interior is separate from the live reflection of the wire.
+    vec3 screen = texture(kitAtlas,vAtlas).rgb;
+    vec2 q = vec2(vAtlas.x*0.92+vAtlas.y, vAtlas.x*0.92-vAtlas.y)*234.0;
+    vec2 fw = max(fwidth(q), vec2(0.001)), dist = abs(fract(q)-0.5);
+    vec2 wire = mix(1.0-smoothstep(vec2(0.12)-0.45*fw,vec2(0.12)+0.45*fw,dist),
+                    vec2(0.24), smoothstep(vec2(0.45),vec2(1.1),fw));
+    alb = vec3(0.011) + pow(screen,vec3(1.75))*0.50 + vec3(0.16,0.17,0.165)*max(wire.x,wire.y);
+    rough = 0.65; spec = 0.034;
   }
   else if (M == 7) { // the mask's mesh: dark holes, bright wire, a soft sheen; where the grid is finer than a pixel it
     // settles to its average (mostly dark: the holes are most of it), never a glossy shell
-    vec3 q = vP * 230.0, fw = fwidth(q);
-    vec3 g = abs(fract(q) - 0.5);
-    vec3 line = 1.0 - smoothstep(vec3(0.1) - fw, vec3(0.1) + fw, 0.5 - g);
-    float wire = max(max(line.x, line.y), line.z);
-    float seen = clamp(1.0 - max(fw.x, max(fw.y, fw.z)) * 1.6, 0.0, 1.0);
-    wire = mix(0.16, wire, seen);
-    alb = mix(vec3(0.018, 0.018, 0.022), vec3(0.27, 0.27, 0.29), wire); rough = 0.8; spec = 0.02;
+    // Woven stainless wire in bind space. Filter the two diagonals independently as their pitch falls below a pixel.
+    vec2 q = vec2(vT.x + vT.y, vT.x - vT.y) * 185.0;
+    vec2 footprint = max(fwidth(q), vec2(0.001));
+    vec2 dist = abs(fract(q + 0.5) - 0.5);
+    vec2 wire = mix(1.0 - smoothstep(vec2(0.10)-0.42*footprint, vec2(0.10)+0.42*footprint, dist),
+                    vec2(0.20), smoothstep(vec2(0.4), vec2(1.2), footprint));
+    float coverage = max(wire.x, wire.y);
+    float rake = max(dot(N, normalize(vec3(-0.25,0.55,-0.8))), 0.0);
+    alb = mix(vec3(0.009,0.010,0.012), vec3(0.29,0.30,0.285)*(0.80+0.62*rake), coverage);
+    rough = 0.64; spec = 0.018;
   }
   else if (M == 15) { // cloth: slightly greyed white; a fine weave where it can be seen; seams stitched; folds shaded
     float shade = vC.r, seamD = vC.g;
@@ -155,11 +181,37 @@ void main(){
     float weave = sin(q.x * 6.2832) * sin(q.y * 6.2832) * 0.5 + sin((q.x + q.y) * 3.1416) * 0.5;
     alb *= 1.0 + 0.07 * weave * seen;
     // the seam: a narrow darker line, stitched
-    float sl = smoothstep(0.0045, 0.0018, seamD), st = step(0.5, fract(vT.y * 110.0));
+    float sl = (1.0 - smoothstep(0.0018, 0.0045, seamD)), st = step(0.5, fract(vT.y * 110.0));
     alb *= 1.0 - sl * (0.22 + 0.12 * st);
     // folds and contact: darker and cooler where it's shut in
     alb *= shade; alb = mix(alb * vec3(0.86, 0.9, 1.04), alb, shade);
-    rough = 0.85; spec = 0.035;
+    if (vAtlas.x >= 0.5) {
+      vec3 panel = texture(kitAtlas,vAtlas).rgb;
+      alb *= clamp(pow(panel,vec3(1.6))*1.8,0.27,1.4);
+    } else if (vAtlas.x >= 0.0) {
+      vec3 textile = texture(kitAtlas, vAtlas).rgb;
+      alb *= mix(1.0, clamp(textile.r / 0.69, 0.42, 1.28), 0.78);
+      vec2 dx = dFdx(vAtlas), dy = dFdy(vAtlas);
+      vec3 px = dFdx(vP), py = dFdy(vP);
+      float det = dx.x*dy.y - dx.y*dy.x;
+      if (abs(det) > 1e-12) {
+        vec3 tangent = normalize((px*dy.y - py*dx.y) * sign(det));
+        vec3 bitangent = normalize((py*dx.x - px*dy.x) * sign(det));
+        vec2 slope = (textile.gb - vec2(0.5)) * 1.45;
+        N = normalize(N + tangent*slope.x + bitangent*slope.y);
+      }
+    }
+    float grime = vnoise(vT * vec2(27.0, 18.0));
+    alb *= 0.95 + 0.065 * grime;
+    if (tone == 2) {
+      alb *= vec3(0.82, 0.80, 0.76);
+      rough = 0.69; spec = 0.048;
+    } else { rough = 0.91; spec = 0.026; }
+  }
+  else if (M == 0 && vAtlas.x >= 0.5) {
+    vec3 leather = texture(kitAtlas,vAtlas).rgb;
+    alb *= pow(leather,vec3(1.7))*1.35;
+    rough = 0.78;
   }
   else if (M == 13) { rough = 0.6; spec = 0.05; }
   else if (M == 14) { rough = 0.45; spec = 0.05; }
@@ -174,11 +226,11 @@ void main(){
     // light: the sun through the panes (and not shadowed), the day from the window side, the lamps, a warm bounce
     float sun = sunThrough(vP) * shadowAt();
     float nl = max(dot(N, sunDir), 0.0);
-    vec3 winDir = normalize(vec3(0.0, 0.35, -1.0));
+    vec3 winDir = normalize(vec3(-0.26, 0.58, -0.9));
     float fall = 1.0 / (1.0 + 0.16 * (vP.z - LO.z));
     vec3 day = SKY * (0.12 + 0.88 * max(dot(N, winDir), 0.0)) * 1.0 * fall;
-    vec3 amb = mix(vec3(0.08, 0.06, 0.055), vec3(0.2, 0.22, 0.25), N.y * 0.5 + 0.5);
-    vec3 lamps = vec3(0.22) * max(N.y, 0.0) + vec3(0.42, 0.36, 0.32) * max(-N.y, 0.0);
+    vec3 amb = mix(vec3(0.041, 0.039, 0.034), vec3(0.13, 0.15, 0.17), N.y * 0.5 + 0.5);
+    vec3 lamps = vec3(0.14,0.15,0.14) * max(N.y, 0.0) + vec3(0.085, 0.075, 0.060) * max(-N.y, 0.0);
     float ao = (M == 3 || M == 4 || M == 10) ? contact(vP) : 1.0;
     vec3 light = (SUN * nl * sun + day + amb + lamps) * ao;
     vec3 R = reflect(-V, N);
@@ -195,8 +247,8 @@ void main(){
       vec3 F = vec3(spec) + (1.0 - spec) * fres * (1.0 - rough);
       col = alb * light * (1.0 - metal) + metal * alb * env * ao + F * env * ao * (1.0 - metal * 0.5) + SUN * glint * spec * (1.0 - rough);
       // cloth's sheen at grazing angles (the weave catching the room), and the floor's warm light from below
-      if (M == 7) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 2.0) * 0.05;
-      if (M == 15 || M == 0) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.12 * vC.r + vec3(0.06, 0.04, 0.028) * max(-N.y, 0.0);
+      if (M == 7 || M == 16) col += alb * vec3(0.13,0.14,0.15) + roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 2.0) * 0.05;
+      if (M == 15 || M == 0) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.12 * vC.r + vec3(0.018, 0.014, 0.012) * max(-N.y, 0.0);
     }
   }
   // haze: the far room toward the air's colour, a little greyer
@@ -218,10 +270,10 @@ precision mediump float; out vec4 o; void main(){ o = vec4(1.0); }`;
  * moved by their springs; parts the eye inside the mask doesn't see of its own body sent off screen */
 export const SKIN_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
-layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex;
+layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex; layout(location=7) in vec2 panelUV;
 uniform mat4 vp; uniform mat4 lvp; uniform mat4 bones[15];
 uniform vec3 hem; uniform vec3 sleeveW; uniform vec3 sleeveR; uniform vec2 bend; uniform int hide;
-out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT;
+out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas;
 void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
   vec3 q = (M * vec4(p, 1.0)).xyz, nn = normalize(mat3(M) * n);
@@ -229,7 +281,7 @@ void main(){
   float g = ex.z > 0.0 ? ex.z * bend.x : -ex.z * bend.y;
   q -= nn * g * 0.012;
   vC = c.rgb; if (c.a > 14.5 && c.a < 15.5) vC.r *= 1.0 - 0.38 * g;
-  vP = q; vN = nn; vM = c.a; vT = t; vL = lvp * vec4(q, 1.0);
+  vP = q; vN = nn; vM = c.a; vT = t; vAtlas = panelUV; vL = lvp * vec4(q, 1.0);
   int part = int(ex.w + 0.5);
   gl_Position = ((hide >> part) & 1) == 1 ? vec4(0.0, 0.0, 2.0, 1.0) : vp * vec4(q, 1.0);
 }`;

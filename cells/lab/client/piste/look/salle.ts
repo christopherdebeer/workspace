@@ -19,8 +19,8 @@ export const ROOM = {
 
 // (linear albedos)
 export const PAINT = {
-  floor: [0.12, 0.06, 0.05] as C, piste: [0.42, 0.43, 0.44] as C, line: [0.78, 0.77, 0.74] as C,
-  chalk: [0.22, 0.31, 0.5] as C, chalkFront: [0.3, 0.38, 0.52] as C, windowWall: [0.62, 0.6, 0.54] as C,
+  floor: [0.11, 0.125, 0.108] as C, piste: [0.28, 0.29, 0.285] as C, line: [0.78, 0.77, 0.74] as C,
+  chalk: [0.27, 0.315, 0.29] as C, chalkFront: [0.30, 0.335, 0.31] as C, windowWall: [0.62, 0.6, 0.54] as C,
   dadoL: [0.28, 0.36, 0.33] as C, rightWall: [0.17, 0.21, 0.29] as C, dadoR: [0.11, 0.13, 0.17] as C,
   ceiling: [0.55, 0.55, 0.53] as C, frame: [0.5, 0.5, 0.47] as C, wood: [0.36, 0.18, 0.07] as C, radiator: [0.7, 0.7, 0.67] as C,
   jacket: [0.72, 0.71, 0.68] as C, maskMesh: [0.05, 0.05, 0.055] as C, bib: [0.7, 0.7, 0.67] as C, steel: [0.4, 0.4, 0.42] as C,
@@ -43,8 +43,15 @@ export function buildSalle(): Mesh {
   m.quad([-L, ly, -W + 0.03], [L, ly, -W + 0.03], [L, ly, -W], [-L, ly, -W], P.line, MAT.line);
   m.quad([-L, ly, W], [L, ly, W], [L, ly, W - 0.03], [-L, ly, W - 0.03], P.line, MAT.line);
   // the end walls: chalk blue behind the opponent, a paler blue behind you
-  m.quad([x1, 0, z0], [x1, 0, z1], [x1, h, z1], [x1, h, z0], P.chalk, MAT.paint);
-  m.quad([x0, 0, z1], [x0, 0, z0], [x0, h, z0], [x0, h, z1], P.chalkFront, MAT.paint);
+  m.quad([x1, 0, z0], [x1, 0, z1], [x1, h, z1], [x1, h, z0], P.chalk, MAT.endWall);
+  m.quad([x0, 0, z1], [x0, 0, z0], [x0, h, z0], [x0, h, z1], P.chalkFront, MAT.endWall);
+  // The bench stands free of the photographed plaster and joinery on the end wall.
+  for (const end of [x0,x1]) {
+    const inside = end > 0 ? -1 : 1, x = end + inside*0.012;
+    const bx = x + inside * 0.33;
+    m.box([bx-0.15,0.425,-2.63],[bx+0.15,0.47,-0.68],P.wood,MAT.wood);
+    for (const z of [-2.48,-0.83]) m.box([bx-0.11,0,z],[bx+0.11,0.425,z+0.042],P.dadoR,MAT.rubber);
+  }
   // the right wall: dark and quiet, a darker dado
   m.quad([x0, 1.2, z1], [x1, 1.2, z1], [x1, h, z1], [x0, h, z1], P.rightWall, MAT.paint);
   m.quad([x0, 0, z1], [x1, 0, z1], [x1, 1.2, z1], [x0, 1.2, z1], P.dadoR, MAT.paint);

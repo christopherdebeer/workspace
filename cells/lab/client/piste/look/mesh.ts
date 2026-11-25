@@ -12,7 +12,7 @@ export const MAT = {
   cloth: 0, blade: 1, bell: 2, piste: 3, floor: 4, paint: 5, window: 6, mesh: 7, rubber: 8, skin: 9, line: 10,
   lamp: 11, button: 12, glove: 13, wood: 14,
   /** simulated cloth: its colour slots carry (fold shade, distance to a seam in m, 0), its uv the weave's coordinates */
-  fabric: 15,
+  fabric: 15, maskFront: 16, endWall: 17,
 } as const;
 export type C = [number, number, number];
 

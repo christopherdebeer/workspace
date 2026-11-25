@@ -44,6 +44,7 @@ export class Renderer {
   private u: Record<string, WebGLUniformLocation | null> = {};
   private us: Record<string, WebGLUniformLocation | null> = {};
   private shadowTex: WebGLTexture; private shadowFb: WebGLFramebuffer;
+  private kitTexture: WebGLTexture;
   exposure = 1.05;
   /** the athlete: built once, resident on the GPU, skinned per fencer */
   private athlete: Athlete;
@@ -65,6 +66,28 @@ export class Renderer {
     this.shade = program(gl, SHADOW_VS, SHADOW_FS);
     for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha']) this.u[k] = gl.getUniformLocation(this.main, k);
     this.skin = program(gl, SKIN_VS, MAIN_FS);
+    this.kitTexture = gl.createTexture()!;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.kitTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array([176,128,128]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    const atlas = new Image();
+    atlas.onload = () => {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.kitTexture);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, atlas);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.activeTexture(gl.TEXTURE0);
+    };
+    const assetRoot = document.documentElement.dataset.assets;
+    if (assetRoot) atlas.src = assetRoot + 'kit-relief.webp';
+    for (const pass of [this.main, this.skin]) {
+      gl.useProgram(pass);
+      gl.uniform1i(gl.getUniformLocation(pass, 'kitAtlas'), 1);
+    }
+    gl.activeTexture(gl.TEXTURE0);
     this.skinShade = program(gl, SKIN_SHADOW_VS, SHADOW_FS);
     for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'hide']) this.uk[k] = gl.getUniformLocation(this.skin, k);
     for (const k of ['lvp', 'bones', 'hem']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
@@ -74,7 +97,7 @@ export class Renderer {
     const vb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, this.athlete.verts, gl.STATIC_DRAW);
     const ib = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.athlete.index, gl.STATIC_DRAW);
     const st = SKIN_STRIDE * 4;
-    [[0, 3, 0], [1, 3, 12], [2, 4, 24], [3, 2, 40], [4, 4, 48], [5, 4, 64], [6, 4, 80]].forEach(([l, n, o]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, st, o); });
+    [[0, 3, 0], [1, 3, 12], [2, 4, 24], [3, 2, 40], [4, 4, 48], [5, 4, 64], [6, 4, 80], [7, 2, 96]].forEach(([l, n, o]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, st, o); });
     gl.bindVertexArray(null);
     this.us.lvp = gl.getUniformLocation(this.shade, 'lvp');
     const room = buildSalle();
