@@ -5,7 +5,7 @@
 ![En garde, through the mask](piste/v-mask.jpg)
 ![Touched on the arm](piste/v-wrist.jpg)
 
-Open it and choose: **learn**, seven lessons in the order a beginner is taught, or **fence** against one of four opponents.
+Open it and choose: **learn**, fourteen lessons in the order a fencer is taught, or **fence** against one of four opponents.
 
 ![Learn, or fence](piste/v-menu.jpg)
 
@@ -32,12 +32,21 @@ The lessons follow the order most clubs teach beginners. Each lesson is the fenc
 3. **The lunge.** The same a metre further. Arm first: lunge with a bent arm and the judge says *feet first*, even if it lands.
 4. **Advance, then lunge.** From a little out of reach.
 5. **Parry quarte, riposte.** They attack your inside line from arm's length. Take their blade (your right thumb left), then back at them, at whatever their bell leaves open.
-6. **The stop-hit to the arm.** They step in carelessly, arm half out, hand up. Hit the arm as they step, before their attack comes.
-7. **The point in line.** What you may have found for yourself: arm straight, point on their chest, and they walk onto it. Set it before they step; the judge checks that you did, not only that it landed.
+6. **Parry sixte, riposte.** Taught from quarte, as it's taught in a salle: you hold their blade in quarte, which opens your outside, and they go round under your hand into it. Back to the right, a little: sixte is a small movement.
+7. **Parry septime, riposte.** The low inside line: the point drops and sweeps down and across like a pendulum (thumb down and left).
+8. **Parry octave, riposte.** The low outside line, at the outer side of your front leg (thumb down).
+9. **The stop-hit to the arm.** They step in carelessly, arm half out, hand up. Hit the arm as they step, before their attack comes.
+10. **The point in line.** Arm straight, point on their chest, and they walk onto it. Set it before they step; the judge checks that you did, not only that it landed.
+11. **The beat attack.** They hold a line at you. A sharp beat knocks it aside, and you're in before it comes back; attack straight into it and it's a double.
+12. **The disengage.** They go for your blade with a beat. Slip your point under it as it comes, and hit while their blade sweeps through nothing.
+13. **The one-two.** A compound attack: feint as you step in, and as they parry (giving ground), go round their parry and lunge.
+14. **Second intention.** Lunge to be parried. From the lunge, parry their riposte and hit with the counter-riposte.
 
-The judge reads the bout, so it can say what went wrong, not only whether you scored. It knows how extended your arm was when the lunge began, where on each blade a parry met (forte, middle, foible), which way your hand went, how hard your tip pressed, and how many milliseconds into their attack you hit. So you get *late: move as their arm starts, not as it lands*, or *wrong side: quarte is to your left*, or *you met it on your foible: it slid through*.
+The judge reads the bout, so it can say what went wrong, not only whether you scored. A parry is judged as a parry movement (your hand across for the high lines, your point down for the low ones) that then meets their blade: a blade they bump into where you left it isn't a parry. It knows how extended your arm was when the lunge began, where on each blade a parry met (forte, middle, foible), which way your hand went, how hard your tip pressed, and how many milliseconds into their attack you hit. So you get *late: move as their arm starts, not as it lands*, or *wrong side: quarte is to your left*, or *you met it on your foible: it slid through*.
 
 A lesson starts slow (35–60% pace). Each good repetition speeds it up by 15% and each bad one slows it by 10%. It's passed with three good repetitions at full speed, and passed lessons are ticked in the menu (kept in this browser). *See it again* replays the repetition.
+
+Every lesson is played in the tests by a scripted student who can do only what two thumbs can (its right thumb's travel is mapped exactly as yours is), reacts in a quarter of a second, and watches its point and corrects it. Played right it passes; played wrong it's told why.
 
 The coach is fair rather than fierce. Its hand gives way to a parry made right: it lets its blade go and lifts it clear for your riposte, as a coach does. Its attacks come at a lesson's tempo, about half a second from the first movement to the landing, which leaves time for a normal reaction at full pace. In the stop-hit lesson the attack behind the preparation comes at a fencer's speed, because the time to hit was during the step. Every lesson is tested both ways: a student doing it right passes, and one doing it wrong is told the right thing (`devtools/piste.test.mjs`).
 
@@ -104,7 +113,7 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 - a lunge in and out of distance, a hand too weak to close the tip, a beat, and a blade thrown through another at 20 m/s;
 - the box's lockout and dwell, and the end of the piste;
 - a replay lighting the same lamp at the same instant, and bullet time;
-- every lesson done right and done wrong, and a lesson's pace;
+- every lesson done right (by a student limited to what thumbs can do) and done wrong, and a lesson's pace;
 - a tired arm (weaker, trembling, recovering), and the clock and priority minute;
 - the master against a held line and a timed line, played with a human's reaction and aim;
 - two stand-ins fencing a bout.
@@ -119,7 +128,7 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 
 - **Right of way.** Foil's box is right, but a double at foil goes to the referee, who isn't here yet. Sabre needs cuts, not a button.
 - **The body is kinematic.** It goes where the feet put it, and a blade can't push it. There's no flèche, no recovery forward, no ducking, and no displacement of the target.
-- **More lessons.** I set two aside. *Parry sixte*: side on, your outside line is your sword arm's, and a sixte parry is only the right answer to an attack that gets round your blade, which takes a coach who can disengage. *The beat attack*: the coach's line came back faster than a student's attack could get in. Still to do: those two, the low lines (septime and octave), the disengage, compound attacks and second intention.
+- **More lessons.** Counter-attacks and their answers (the counter-time), the flèche, the riposte in tempo after a retreat, fencing at foil with right of way. And lessons against an opponent who varies its timing.
 - **Wrist shots.** Against a straight arm the bell shields the wrist from the front (it's what it's for). Real wrist hits come from angled thrusts and flicks the opponent doesn't have yet.
 - **The numbers are estimates.** The FIE gives the blade's length, the guard, the tip's spring and the lockout. The blade's stiffness, the arm's strength and the hand's mass are estimated, and left as dials to be measured.
 - **The picture** has no shadows, no kit and no sound of steel. It's there to show what the simulation does, and looks can come later over the same bout.
