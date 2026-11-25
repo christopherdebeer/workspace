@@ -18,6 +18,8 @@ interface Ring { c: V; u: V; w: V; ru: number; rw: number }
 interface Collider { a: V; b: V; ra: number; rb: number }
 interface Spec {
   name: string; rows: number; cols: number;
+  /** a weighted, stiffened hem: its last rows this much heavier (as gravity on them), held flatter along their length */
+  hem?: number;
   /** the garment's shape on the body at t (0 its top .. 1 its bottom) */
   ring: (f: Fencer, t: number) => Ring;
   /** rows held to the body */
@@ -53,24 +55,24 @@ function prof(keys: [number, number, number][], t: number): [number, number] {
   }
   const l = keys[keys.length - 1]; return [l[1], l[2]];
 }
-const wrist = (f: Fencer) => madd(f.hand, norm(sub(f.elbow, f.hand)), 0.105);
+const wrist = (f: Fencer) => madd(f.hand, norm(sub(f.elbowLook, f.hand)), 0.105);
 
 const JACKET: Spec = {
-  name: 'jacket', rows: 13, cols: 20, pins: [0, 1], slack: 1, seams: [0.25, 0.75, 0.5],
+  name: 'jacket', rows: 13, cols: 20, pins: [0, 1], slack: 1, hem: 2.2, seams: [0.25, 0.75, 0.5],
   ring(f, t) {
     const c = f.capsules, pelvis = c[0].a, chest = c[0].b, neck = c[1].b, spine = norm(sub(neck, pelvis));
     // (down the spine from the collar to the hem, below the hips)
     const top = madd(neck, spine, 0.025), hem = madd(pelvis, spine, -0.14);
     const p = t < 0.3 ? lerp(top, lerp(chest, neck, 0.35), t / 0.3) : lerp(lerp(chest, neck, 0.35), hem, (t - 0.3) / 0.7);
     const [u] = around(spine, f.frame.f), w = norm(cross(spine, u));
-    const [ru, rw] = prof([[0, 0.078, 0.072], [0.1, 0.14, 0.11], [0.24, 0.235, 0.172], [0.45, 0.226, 0.186], [0.7, 0.206, 0.18], [1, 0.205, 0.185]], t);
+    const [ru, rw] = prof([[0, 0.078, 0.072], [0.1, 0.135, 0.105], [0.24, 0.215, 0.16], [0.45, 0.198, 0.168], [0.7, 0.182, 0.158], [0.88, 0.19, 0.165], [1, 0.192, 0.168]], t);
     return { c: madd(p, u, 0.012 * Math.min(1, t * 3)), u, w, ru, rw };
   },
   colliders(f) {
     const c = f.capsules;
     return [
-      { a: c[0].a, b: c[0].b, ra: 0.17, rb: 0.18 }, { a: c[1].a, b: c[1].b, ra: 0.16, rb: 0.07 },
-      { a: c[3].a, b: c[3].b, ra: 0.095, rb: 0.085 }, { a: c[4].a, b: c[4].b, ra: 0.08, rb: 0.065 }, { a: c[7].a, b: c[7].b, ra: 0.075, rb: 0.06 },
+      { a: c[0].a, b: c[0].b, ra: 0.158, rb: 0.163 }, { a: c[1].a, b: c[1].b, ra: 0.15, rb: 0.07 },
+      { a: c[3].a, b: c[3].b, ra: 0.09, rb: 0.08 }, { a: f.shoulder, b: f.elbowLook, ra: 0.08, rb: 0.065 }, { a: c[7].a, b: c[7].b, ra: 0.075, rb: 0.06 },
       { a: c[9].a, b: c[9].b, ra: 0.115, rb: 0.09 }, { a: c[11].a, b: c[11].b, ra: 0.115, rb: 0.09 },
     ];
   },
@@ -78,14 +80,16 @@ const JACKET: Spec = {
 const sleeve = (rear: boolean): Spec => ({
   name: rear ? 'rear sleeve' : 'sleeve', rows: 10, cols: 10, pins: [0, 9], slack: 1.07, seams: [0.5],
   ring(f, t) {
-    const c = f.capsules, pts = rear ? [c[7].a, c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.04)] : [madd(f.shoulder, norm(sub(f.shoulder, f.elbow)), 0.02), f.elbow, wrist(f)];
+    const c = f.capsules, pts = rear ? [c[7].a, c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.04)] : [madd(f.shoulder, norm(sub(f.shoulder, f.elbowLook)), 0.02), f.elbowLook, wrist(f)];
     const { p, d } = along(pts, t), [u, w] = around(d, f.frame.u);
     const [r] = prof([[0, rear ? 0.088 : 0.094, 0], [0.45, rear ? 0.072 : 0.078, 0], [0.8, 0.064, 0], [1, 0.05, 0]], t);
     return { c: p, u, w, ru: r, rw: r * 0.94 };
   },
   colliders(f) {
     const c = f.capsules, k = rear ? 7 : 4;
-    return [{ a: c[k].a, b: c[k].b, ra: 0.062, rb: 0.052 }, { a: c[k + 1].a, b: c[k + 1].b, ra: 0.05, rb: 0.042 }, { a: c[0].a, b: c[0].b, ra: 0.17, rb: 0.18 }];
+    // (the weapon arm as it's drawn: the elbow tucked under the forearm)
+    const [ua, ub, fa, fb] = rear ? [c[k].a, c[k].b, c[k + 1].a, c[k + 1].b] : [f.shoulder, f.elbowLook, f.elbowLook, f.hand];
+    return [{ a: ua, b: ub, ra: 0.062, rb: 0.052 }, { a: fa, b: fb, ra: 0.05, rb: 0.042 }, { a: c[0].a, b: c[0].b, ra: 0.158, rb: 0.163 }];
   },
 });
 const knickers = (rear: boolean): Spec => ({
@@ -94,7 +98,7 @@ const knickers = (rear: boolean): Spec => ({
     const c = f.capsules, th = c[rear ? 11 : 9], sh = c[rear ? 12 : 10];
     const band = lerp(sh.a, sh.b, 0.17), pts = [madd(th.a, up, 0.07), th.b, band];
     const { p, d } = along(pts, t), [u, w] = around(d, f.frame.f);
-    const [r] = prof([[0, 0.135, 0], [0.35, 0.125, 0], [0.75, 0.095, 0], [1, 0.08, 0]], t);
+    const [r] = prof([[0, 0.122, 0], [0.35, 0.112, 0], [0.75, 0.088, 0], [1, 0.076, 0]], t);
     return { c: p, u, w, ru: r, rw: r * 0.92 };
   },
   colliders(f) {
@@ -135,6 +139,8 @@ export class Garment {
       if (i < rows - 1) { add2(id(i, j), id(i + 1, j), 0.5, spec.slack); add2(id(i, j), id(i + 1, j + 1), 0.3, spec.slack); add2(id(i, j + 1), id(i + 1, j), 0.3, spec.slack); }
       if (i < rows - 2) add2(id(i, j), id(i + 2, j), 0.14, spec.slack);
       add2(id(i, j), id(i, j + 2), 0.2);
+      // (a hem: stiff round its length, so it swings as a band instead of flaring)
+      if (spec.hem && i >= rows - 2) { add2(id(i, j), id(i, j + 2), 0.9); add2(id(i, j), id(i, j + 3), 0.6); if (i < rows - 1) add2(id(i, j), id(i + 1, j), 0.9, spec.slack); }
     }
     this.ci = Int32Array.from(ci); this.cr = Float32Array.from(cr); this.cs = Float32Array.from(cs);
     // the fabric's own coordinates, and its seams
@@ -174,12 +180,13 @@ export class Garment {
       for (let j = 0; j < cols; j++) { const a = (j / cols) * Math.PI * 2; held.push({ k: (i * cols + j) * 3, q: add(r.c, add(scale(r.u, Math.cos(a) * r.ru), scale(r.w, Math.sin(a) * r.rw))) }); }
     }
     const cols_ = this.spec.colliders(f);
-    const n = Math.min(4, Math.max(1, Math.ceil(dt / STEP))), h = dt / n, damp = Math.pow(0.08, h);
+    const n = Math.min(4, Math.max(1, Math.ceil(dt / STEP))), h = dt / n, damp = Math.pow(0.22, h);
+    const hemFrom = this.spec.hem ? (rows - 2) * cols * 3 : x.length, hemG = this.spec.hem ?? 1;
     for (let s = 0; s < n; s++) {
       for (let k = 0; k < x.length; k += 3) {
         const vx = (x[k] - p[k]) * damp, vy = (x[k + 1] - p[k + 1]) * damp, vz = (x[k + 2] - p[k + 2]) * damp;
         p[k] = x[k]; p[k + 1] = x[k + 1]; p[k + 2] = x[k + 2];
-        x[k] += vx; x[k + 1] += vy - G * h * h; x[k + 2] += vz;
+        x[k] += vx; x[k + 1] += vy - G * h * h * (k >= hemFrom ? hemG : 1); x[k + 2] += vz;
       }
       // (the held rows follow the body over the substeps)
       const blend = (s + 1) / n;

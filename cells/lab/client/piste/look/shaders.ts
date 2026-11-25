@@ -136,15 +136,15 @@ void main(){
     alb *= 1.0 - 0.35 * smoothstep(0.004, 0.0, abs(fract(vP.z / 0.14) - 0.5) - 0.495);
     rough = 0.55; spec = 0.05;
   }
-  else if (M == 7) { // the mask's mesh: a fine grid of bright wire over dark holes, with a soft sheen; where the grid is
-    // finer than a pixel it settles to its average
+  else if (M == 7) { // the mask's mesh: dark holes, bright wire, a soft sheen; where the grid is finer than a pixel it
+    // settles to its average (mostly dark: the holes are most of it), never a glossy shell
     vec3 q = vP * 230.0, fw = fwidth(q);
     vec3 g = abs(fract(q) - 0.5);
-    vec3 line = 1.0 - smoothstep(vec3(0.12) - fw, vec3(0.12) + fw, 0.5 - g);
+    vec3 line = 1.0 - smoothstep(vec3(0.1) - fw, vec3(0.1) + fw, 0.5 - g);
     float wire = max(max(line.x, line.y), line.z);
     float seen = clamp(1.0 - max(fw.x, max(fw.y, fw.z)) * 1.6, 0.0, 1.0);
-    wire = mix(0.42, wire, seen);
-    alb = mix(vec3(0.03, 0.03, 0.035), vec3(0.34, 0.34, 0.36), wire); rough = 0.35; spec = 0.12;
+    wire = mix(0.16, wire, seen);
+    alb = mix(vec3(0.018, 0.018, 0.022), vec3(0.27, 0.27, 0.29), wire); rough = 0.8; spec = 0.02;
   }
   else if (M == 15) { // cloth: slightly greyed white; a fine weave where it can be seen; seams stitched; folds shaded
     float shade = vC.r, seamD = vC.g;
@@ -192,6 +192,7 @@ void main(){
       vec3 F = vec3(spec) + (1.0 - spec) * fres * (1.0 - rough);
       col = alb * light * (1.0 - metal) + metal * alb * env * ao + F * env * ao * (1.0 - metal * 0.5) + SUN * glint * spec * (1.0 - rough);
       // cloth's sheen at grazing angles (the weave catching the room), and the floor's warm light from below
+      if (M == 7) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 2.0) * 0.05;
       if (M == 15 || M == 0) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.12 * vC.r + vec3(0.06, 0.04, 0.028) * max(-N.y, 0.0);
     }
   }
