@@ -2,6 +2,12 @@
 
 Made by `node cells/lab/views.mjs piste` from `client/piste/views.mjs`. The README is `../piste.md`.
 
+## The look
+
+![The study: en garde in the daylight room: five quiet seconds to judge the look by: the opponent at their line, your bell low on the right, the windows' light on the floor](v-study-start.jpg)
+![One step closer: the same moment a step later: how much nearer they are, read off their size, the piste's lines and the window light sliding under them](v-study-closer.jpg)
+![Your hand rolled: the wrist turned a little: the blade's faces take the window differently, the bell (mounted off-centre) shifts, the glove turns](v-study-rolled.jpg)
+
 ## Learning
 
 ![Learn, or fence: seven lessons in the order a beginner learns them; four opponents, each allowing less bullet time](v-menu.jpg)

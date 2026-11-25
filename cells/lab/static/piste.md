@@ -123,3 +123,19 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 - **Wrist shots.** Against a straight arm the bell shields the wrist from the front (it's what it's for). Real wrist hits come from angled thrusts and flicks the opponent doesn't have yet.
 - **The numbers are estimates.** The FIE gives the blade's length, the guard, the tip's spring and the lockout. The blade's stiffness, the arm's strength and the hand's mass are estimated, and left as dials to be measured.
 - **The picture** has no shadows, no kit and no sound of steel. It's there to show what the simulation does, and looks can come later over the same bout.
+
+## The look
+
+![The study: en garde in the daylight room](piste/v-study-start.jpg)
+![One step closer](piste/v-study-closer.jpg)
+![Your hand rolled](piste/v-study-rolled.jpg)
+
+A daylight fencing club, with the restraint of a painted study. The left wall is one bank of high windows. The other walls are quiet planes of paint, and the chalk-blue end wall behind the opponent gives a fine blade a calm field to move against. The piste is dull steel so that shoes and their shadows read on it. The floor is dark boards, and a bench, masks and jackets on their hooks give the room a life outside this bout (`look/salle.ts`).
+
+The light is this room's. The sun comes in through the windows and lands on the floor in their shapes, through the panes and broken by the frames. It only reaches what the line to the sun can reach through a pane, and the fencers cast shadows in it from a shadow map. The day comes from the window side, falling off across the room, and the lamps light from above. The floor darkens softly under each shoe, and under each tip, so you can see where your point is in depth even when it's far from the floor. The far room hazes a little toward the air (`look/shaders.ts`).
+
+The steel reflects this room too. A reflection is followed to the room's walls, so a highlight on the bell is one of these windows, and it moves when the steel turns. Turning is what your hand does. The épée's bell is mounted off-centre on the blade and hammered, and the blade is triangular. So when you roll your hand (a second finger on the right), the bell shifts, its highlights travel, the blade's faces take the window in turn, and the glove's seam turns with them. A small gesture gets a visible answer even when the point barely moves (`look/figure.ts`).
+
+The kit is white cloth in planes, as the study paints it: a side-on torso, sleeves and knickers in faceted rings that fold a little at each one, knee bands, long socks, and shoes with dark soles. The mask is a dark mesh over a white bib, kept from being the most contrasting thing in the picture.
+
+`study` plays five seconds in the room: the opponent takes one step closer, your wrist rolls a little, and both settle (it loops). It's there to judge the look by at phone size: can you feel how much distance closed, and can you see what your hand did? `node cells/lab/devtools/piste-study.mjs` renders it frame by frame, and `piste-look.mjs` renders any views beside the art-direction studies.
