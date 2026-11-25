@@ -102,6 +102,7 @@ interface LoftOpt {
   seg: number; col: (i: number, j: number) => C; mat: (i: number, j: number) => number;
   weights: (i: number, j: number, p: V) => W; extra?: (i: number, j: number, p: V) => [number, number, number, number];
   /** fabric: (circumference uv, along uv, distance to a seam) are worked out from the shape */
+  fit?: (p: V) => V;
   panel?: number;
   panelUV?: (i: number, j: number, p: V) => [number, number];
   seams?: number[]; tone?: number; capA?: boolean; capB?: boolean;
@@ -117,7 +118,7 @@ function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
     const a = ang(j), [ru, rw] = r.r(a);
     const p = add(r.c, add(scale(r.u, Math.cos(a) * ru), scale(r.w, Math.sin(a) * rw)));
     p[1] += r.lift?.(a) ?? 0;
-    return p;
+    return o.fit ? o.fit(p) : p;
   }));
   const R = rings.length;
   const nb = (j: number) => open ? [Math.max(0, j - 1), Math.min(J - 1, j + 1)] : [(j + S - 1) % S, (j + 1) % S];
@@ -219,6 +220,25 @@ export function buildAthlete(): Athlete {
   // Orient each cross-section along the anatomical landmark it passes through.
   const hipLine = norm(sub(c[9].a,c[11].a));
   const clavicle = norm(add(sub(f.shoulder,c[7].a), scale(F.r,0.085)));
+  // Tailor only the high shoulder, in bind space. Leave ease for the padded jacket.
+  const fitShoulder = (p: V): V => {
+    const height = p[1] - hy;
+    const influence = smooth(blend(height, 0.27, 0.35)) * (1 - smooth(blend(height, 0.49, 0.55)));
+    if (influence === 0) return p;
+    let nearest = p, gap = Infinity;
+    for (const cap of c) {
+      const axis = sub(cap.b, cap.a);
+      const t = blend(dot(sub(p, cap.a), axis), 0, Math.max(1e-9, dot(axis, axis)));
+      const center = madd(cap.a, axis, t);
+      const radius = cap.ra + (cap.rb - cap.ra) * t;
+      const delta = sub(p, center), distance = len(delta);
+      if (distance - radius < gap) {
+        gap = distance - radius;
+        nearest = madd(center, norm(delta), radius + 0.008);
+      }
+    }
+    return gap <= 0.008 ? p : lerp(p, nearest, 0.88 * influence);
+  };
   const torsoRings: Ring[] = Array.from({ length: 68 }, (_, i) => {
     const h = -0.09 + 0.645 * i / 67;
     const section = (axis: number) => prof(H.map(row => [row[0], row[axis]]), h);
@@ -238,7 +258,7 @@ export function buildAthlete(): Athlete {
     }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) + 0.013*Math.cos(a)*Math.exp(-(((h-0.43)/0.095)**2)) };
   });
   loft(m, torsoRings, {
-    panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75, 0.62], capB: true,
+    fit: fitShoulder, panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
     weights: (i, j, p) => {
       const h = p[1] - hy, k = blend(h, 0.18, 0.4);
       const w: W = [[B.pelvis, 1 - k], [B.chest, k]];
@@ -274,7 +294,7 @@ export function buildAthlete(): Athlete {
     // the inside of the elbow (toward the chord from shoulder to wrist) gathers as it bends
     const E = pts[1], inner = norm(sub(lerp(pts[0], pts[2], 0.5), E));
     loft(m, rings, {
-      panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
+      fit: fitShoulder, panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
       weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.40 * (1 - smooth(blend(s, 0, 0.16))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
       extra: (i, j, p) => {
         const s = i / (N - 1), near = Math.max(0, 1 - Math.abs(s - sE) / 0.13), face = Math.max(0, dot(norm(sub(p, rings[i].c)), inner));
@@ -286,19 +306,19 @@ export function buildAthlete(): Athlete {
   sleeve([madd(madd(lerp(f.shoulder, c[7].a, 0.16), up, 0.004), F.r, -0.02), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
   sleeve([madd(madd(lerp(c[7].a, f.shoulder, 0.16), up, 0.0), F.r, 0.012), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
 
-  // Breeches share a seat between both hip sockets. The lower edge rises over the outside of each thigh.
-  const seat: Ring[] = Array.from({length: 20}, (_,i) => {
-    const t=i/19;
-    const width=prof([[0,0.101],[0.28,0.166],[0.58,0.186],[1,0.153]],t);
-    const depth=prof([[0,0.071],[0.35,0.125],[0.62,0.139],[1,0.113]],t);
-    return {c:madd(pelvis,up,-0.132+0.192*t),u:hipLine,w:norm(cross(hipLine,up)),
-      lift:a=>0.045*Math.cos(a)**2*(1-t),
-      r:a=>[width,depth*(1+0.07*Math.sin(a))]};
+  // An inset gusset closes the small opening between the two leg tops under the hem.
+  const gusset: Ring[] = Array.from({ length: 12 }, (_, i) => {
+    const t = i / 11;
+    return { c: madd(pelvis, up, -0.109 + t * 0.096), u: hipLine, w: norm(cross(hipLine, up)),
+      lift: a => 0.028 * Math.cos(a) ** 2 * (1 - t),
+      r: () => [0.040 + 0.080 * t, 0.040 + 0.044 * t] };
   });
-  loft(m,seat,{panel:2,seg:40,col:white,mat:fab,tone:TONE.breeches,seams:[],capA:true,
-    weights:(i,j)=>{const front=(1+Math.cos(j/40*2*Math.PI))*0.5;
-      const thigh=0.45*(1-i/19);return [[B.pelvis,1-thigh],[B.thighF,front*thigh],[B.thighB,(1-front)*thigh]];},
-    extra:()=>[0,0,0,PART.torso]});
+  loft(m, gusset, { panel: 2, seg: 32, col: white, mat: fab, tone: TONE.breeches, capA: true,
+    weights: (i, j) => {
+      const thigh = 0.84 * (1 - smooth(i / 11));
+      const front = smooth((1 + Math.cos(j * Math.PI / 16)) / 2);
+      return [[B.pelvis, 1 - thigh], [B.thighF, thigh * front], [B.thighB, thigh * (1 - front)]];
+    }, extra: () => [0, 0, 0, PART.torso] });
 
   // ── legs: breeches full to below the knee, the band, the knee and calf under the sock, the ankle ───────────────────
   const leg = (th: number, sh: number, pole: V) => {
@@ -394,7 +414,7 @@ export function buildAthlete(): Athlete {
   const faceRing = (s: number, outset = 0): Ring => ({
     c: madd(madd(hc, fwd, 0.071 + 0.063 * (1 - s*s) + outset), up, 0.012),
     u: up, w: side,
-    r: a => boxR(a, 0.151*s, (0.109 + 0.006*Math.cos(a))*s, 2.35),
+    r: a => boxR(a, 0.145*s, (0.111 + 0.013*Math.cos(a))*s, 2.65),
   });
   loft(m, Array.from({length: 19}, (_, i) => faceRing(0.008 + 0.992*i/18)), {
     panel: 4, panelUV: (_i,_j,p) => [0.5 + dot(sub(p,hc),side)/0.23, 0.5 - (p[1]-hc[1]-0.012)/0.31],
@@ -403,22 +423,22 @@ export function buildAthlete(): Athlete {
   loft(m, [faceRing(0.948, 0.001), faceRing(0.98, 0.0035), faceRing(1, 0.003), faceRing(1.025, -0.0005), faceRing(1.03, -0.008)], {
     seg: 72, col: () => [0.26, 0.25, 0.22], mat: () => MAT.rubber, weights: () => hw, extra: hx,
   });
-  // the bib: wrapped round the neck from under the jaw, flaring down so its lower edge lies on the chest
-  const bibRings: Ring[] = [];
-  const BN = 22, chestY = neck[1] - 0.058;
-  for (let i = 0; i < BN; i++) {
-    const t = i / (BN - 1), y = lerp([0, hc[1] - 0.1, 0], [0, chestY, 0], t)[1];
-    const ctr: V = [lerp(hc, neck, t)[0] + 0.012 * t, y, lerp(hc, neck, t)[2]];
-    const rf = prof([[0, 0.074], [0.5, 0.10], [1, 0.145]], t), rs = prof([[0, 0.081], [0.5, 0.091], [1, 0.103]], t);
-    bibRings.push({ c: ctr, u: fwd, w: side, lift: a => t * (0.032 - 0.04*Math.cos(a) + 0.009*Math.sin(2*a)), r: a => {
-      const quilt = 0.0015*pleat(t, 0.78 + 0.08*Math.sin(a), 0.06);
-      return [(Math.cos(a) > 0 ? rf : rf*0.7) + quilt, rs + quilt];
-    } });
-  }
-  loft(m, bibRings, {
-    panel: 5, seg: 40, col: white, mat: fab, tone: TONE.jacket, seams: [],
-    weights: (i) => { const t = i / (BN - 1); return [[B.head, 0.6 * (1 - t)], [B.chest, 0.4 + 0.6 * t]]; },
-    extra: () => [0, 0, 0, PART.head],
+  // A bias-bound apron leaves the sides of the collar in shadow and lies flat over the sternum.
+  const bibArc: [number, number] = [-2.02, 2.02];
+  const bibRow = (t: number, piping = 0): Ring => ({
+    c: lerp(madd(hc, up, -0.087), madd(neck, up, -0.030), t),
+    u: fwd, w: side,
+    lift: a => -0.072 * t * Math.max(0, Math.cos(a)) ** 2 + 0.014*t*Math.abs(Math.sin(a)),
+    r: a => [0.087 + 0.068*t + piping, 0.084 + 0.018*t + piping],
+  });
+  const bibWeights = (t: number): W => [[B.head, 0.85*(1-t)], [B.chest, 0.15 + 0.85*t]];
+  loft(m, Array.from({length:18}, (_,i)=>bibRow(i/17)), {
+    arc: bibArc, panel: 5, seg: 40, col: white, mat: fab, tone: TONE.jacket,
+    weights: i => bibWeights(i/17), extra: hx,
+  });
+  loft(m, [bibRow(0.945,0.001),bibRow(0.975,0.0025),bibRow(1,0.0005)], {
+    arc: bibArc, seg: 40, col: () => [0.42,0.41,0.38], mat: () => MAT.cloth,
+    weights: i => bibWeights([0.945,0.975,1][i]), extra: hx,
   });
 
   // ── the weapon hand: a gloved hand on the grip ─────────────────────────────────────────────────────────────────
@@ -579,3 +599,4 @@ export class Secondary {
 }
 /** how far an elbow is bent (0 straight .. 1 folded) */
 export const bendOf = (a: V, e: V, h: V) => Math.max(0, Math.min(1, (1 + dot(norm(sub(a, e)), norm(sub(h, e)))) / 1.2));
+

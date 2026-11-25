@@ -8,7 +8,7 @@ const lab = new URL('../client/piste/', import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './look/athlete'; export * from './v3'; export * from './intent';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const { Bout, EPEE, buildAthlete, boneFrames, skinMatrices, BONES, SKIN_STRIDE, idle } = M;
-const lunge = process.argv[2] === 'lunge';
+const lunge = process.argv.includes('lunge');
 const b = new Bout({ weapon: EPEE, to: 5, referee: false }); b.place(2);
 const f = b.fencers[0];
 for (let i = 0; i < 90; i++) { f.intent = { ...idle(), extend: lunge ? 1 : 0.45, lunge }; b.fencers[1].intent = idle(); b.advance(1 / 60); }
@@ -38,3 +38,30 @@ f.capsules.forEach((c, i) => {
     console.log('    trunk section: along forward', pct(fs, 0.05).toFixed(3), '..', pct(fs, 0.95).toFixed(3), '| along right', pct(rs, 0.05).toFixed(3), '..', pct(rs, 0.95).toFixed(3));
   }
 });
+
+// Measure clearance from all contact volumes. A shoulder vertex may already be covered by the adjoining upper arm.
+const shoulder = [];
+for (let v = 0; v < n; v++) {
+  const k = v * SKIN_STRIDE, height = A.verts[k + 1] - A.bind[0].o[1];
+  if (height < 0.34 || height > 0.51 || A.verts[k+9] !== 15 || ![1,3,6].includes(bone[v])) continue;
+  const p = P[v];
+  const clearance = Math.min(...f.capsules.map(c => {
+    const axis = M.sub(c.b,c.a);
+    const t = Math.max(0,Math.min(1,M.dot(M.sub(p,c.a),axis)/Math.max(1e-9,M.dot(axis,axis))));
+    return M.len(M.sub(p,M.madd(c.a,axis,t))) - (c.ra+(c.rb-c.ra)*t);
+  }));
+  shoulder.push({p,clearance});
+}
+const clearances = shoulder.map(v=>v.clearance);
+console.log('Shoulder clearance from the full body, cm:', [0.5,0.9,0.99].map(q=>(100*pct(clearances,q)).toFixed(2)));
+const mapPath = process.argv.find(a=>a.startsWith('--map='))?.slice(6);
+if (mapPath) {
+  const { writeFileSync } = await import('node:fs');
+  const cx = f.capsules[1].a;
+  const marks = shoulder.slice().sort((a,b)=>a.p[0]-b.p[0]).map(({p,clearance})=>{
+    const x=220+850*(p[2]-cx[2]), y=150-850*(p[1]-cx[1]);
+    const color=clearance<=0?'#526b69':clearance<0.02?'#dda649':'#ca4e45';
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="1.6" fill="${color}"/>`;
+  });
+  writeFileSync(mapPath,`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 270"><rect width="440" height="270" fill="white"/>${marks.join('')}<text x="12" y="252" font-size="13">Green: covered · Amber: 0–2 cm outside · Red: over 2 cm</text></svg>`);
+}
