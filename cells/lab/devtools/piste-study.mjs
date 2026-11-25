@@ -11,7 +11,7 @@ await withWood(async (lab) => {
     await page.waitForTimeout(1200);
     shots.push(await lab.shot(page, `study-${t}`));
     const path = `${lab.base ? '' : ''}${process.cwd()}/devtools/out/study-hand-${t}.png`;
-    await page.screenshot({ path, clip: { x: 170, y: 520, width: 220, height: 324 } });
+    await page.screenshot({ path, clip: { x: 150, y: 470, width: 240, height: 374 } });
     crops.push(path); labels.push(`t ${t}s`);
     await page.close();
   }

@@ -28,7 +28,7 @@ precision highp float;
 precision highp sampler2DShadow;
 in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL;
 uniform vec3 eye; uniform vec3 sunDir; uniform sampler2DShadow shadow; uniform float exposure;
-uniform vec4 feet[4]; uniform vec4 tips[2];
+uniform vec4 feet[4]; uniform vec4 tips[2]; uniform vec3 bladeA[2]; uniform vec3 bladeB[2];
 out vec4 o;
 
 const vec3 LO = vec3(${f(R.x0)}, 0.0, ${f(R.z0)}), HI = vec3(${f(R.x1)}, ${f(R.h)}, ${f(R.z1)});
@@ -54,14 +54,14 @@ vec3 daylight(float y){ float t = clamp((y - ${f(R.winY0)}) / ${f(R.winY1 - R.wi
   return mix(vec3(2.1, 2.25, 2.1), vec3(2.9, 3.05, 3.3), t); }
 
 // what the room looks like along a ray from p: the radiance where it meets the room's box
-vec3 room(vec3 p, vec3 d){
+vec3 room(vec3 p, vec3 d, float wb){
   vec3 t1 = (LO - p) / d, t2 = (HI - p) / d, tf = max(t1, t2);
   float t = min(min(tf.x, tf.y), tf.z);
   vec3 h = p + d * t;
   if (t == tf.z && d.z < 0.0) { // the window wall
     float g = pane(h.x, h.y);
     vec3 wall = ${v3(PAINT.windowWall)} * (h.y < 1.2 ? 0.55 : 0.75);
-    return mix(wall, daylight(h.y), g);
+    return mix(wall, daylight(h.y) * wb, g);
   }
   if (t == tf.z) return (h.y < 1.2 ? ${v3(PAINT.dadoR)} : ${v3(PAINT.rightWall)}) * 0.9;
   if (t == tf.x) return d.x > 0.0 ? ${v3(PAINT.chalk)} * 0.95 : ${v3(PAINT.chalkFront)} * 0.9;
@@ -100,7 +100,16 @@ float contact(vec3 p){
   float k = 1.0;
   for (int i = 0; i < 4; i++) { vec2 d = p.xz - feet[i].xz; float r = feet[i].w; k *= 1.0 - 0.55 * exp(-dot(d, d) / (r * r)); }
   for (int i = 0; i < 2; i++) { float hgt = max(0.0, tips[i].y); float r = 0.03 + hgt * 0.035; vec2 d = p.xz - tips[i].xz;
-    k *= 1.0 - tips[i].w * (0.5 / (1.0 + hgt * 0.8)) * exp(-dot(d, d) / (r * r)); }
+    k *= 1.0 - tips[i].w * (0.62 / (1.0 + hgt * 0.5)) * exp(-dot(d, d) / (r * r)); }
+  // the blades' own thin shadows, straight down (the lamps overhead): a line on the floor from under the guard to under
+  // the tip, finer and darker where the steel is nearer the floor, ending at the tip's mark
+  for (int i = 0; i < 2; i++) {
+    vec2 a = bladeA[i].xz, b = bladeB[i].xz, ab = b - a;
+    float t = clamp(dot(p.xz - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+    float hgt = max(0.0, mix(bladeA[i].y, bladeB[i].y, t)), w = 0.006 + hgt * 0.006;
+    float dd = length(p.xz - (a + ab * t));
+    k *= 1.0 - (0.55 / (1.0 + hgt * 0.45)) * smoothstep(0.0, 0.25, t) * exp(-dd * dd / (w * w));
+  }
   return k;
 }
 
@@ -113,9 +122,9 @@ void main(){
   vec3 emit = vec3(0.0);
   if (M == 6) { emit = daylight(vP.y); }
   else if (M == 11) { emit = vC * 2.4; }
-  else if (M == 1) { metal = 1.0; rough = 0.12; }
-  else if (M == 2) { metal = 1.0; rough = 0.07; }
-  else if (M == 12) { metal = 1.0; rough = 0.35; }
+  else if (M == 1) { metal = 1.0; rough = 0.05; }
+  else if (M == 2) { metal = 1.0; rough = 0.04; }
+  else if (M == 12) { metal = 1.0; rough = 0.2; }
   else if (M == 3) { // the piste: brushed steel plates, dull
     float br = vnoise(vec2(vP.x * 3.0, vP.z * 160.0)) * 0.5 + vnoise(vec2(vP.x * 0.7, vP.z * 9.0)) * 0.5;
     float seam = smoothstep(0.006, 0.0, abs(mod(vP.x, 1.5) - 0.75) - 0.744);
@@ -127,11 +136,15 @@ void main(){
     alb *= 1.0 - 0.35 * smoothstep(0.004, 0.0, abs(fract(vP.z / 0.14) - 0.5) - 0.495);
     rough = 0.55; spec = 0.05;
   }
-  else if (M == 7) { // the mask's mesh: dark wire, a little light through it; the grid only where it can be seen
-    float w = clamp(0.002 * length(eye - vP) * 400.0 / 3.0, 0.0, 1.0);
-    vec3 g = abs(fract(vP * 260.0) - 0.5);
-    float wire = mix(smoothstep(0.32, 0.18, min(g.x, min(g.y, g.z))), 0.55, w);
-    alb = mix(vec3(0.16, 0.16, 0.17), vC, wire); rough = 0.5; spec = 0.06;
+  else if (M == 7) { // the mask's mesh: a fine grid of bright wire over dark holes, with a soft sheen; where the grid is
+    // finer than a pixel it settles to its average
+    vec3 q = vP * 230.0, fw = fwidth(q);
+    vec3 g = abs(fract(q) - 0.5);
+    vec3 line = 1.0 - smoothstep(vec3(0.12) - fw, vec3(0.12) + fw, 0.5 - g);
+    float wire = max(max(line.x, line.y), line.z);
+    float seen = clamp(1.0 - max(fw.x, max(fw.y, fw.z)) * 1.6, 0.0, 1.0);
+    wire = mix(0.42, wire, seen);
+    alb = mix(vec3(0.03, 0.03, 0.035), vec3(0.34, 0.34, 0.36), wire); rough = 0.35; spec = 0.12;
   }
   else if (M == 13) { rough = 0.6; spec = 0.05; }
   else if (M == 14) { rough = 0.45; spec = 0.05; }
@@ -152,13 +165,15 @@ void main(){
     float ao = (M == 3 || M == 4 || M == 10) ? contact(vP) : 1.0;
     vec3 light = (SUN * nl * sun + day + amb + lamps) * ao;
     vec3 R = reflect(-V, N);
-    vec3 env = mix(room(vP + N * 0.01, R), roomSoft(R), clamp(rough * 1.4, 0.0, 1.0));
+    vec3 env = mix(room(vP + N * 0.01, R, metal > 0.5 ? 2.6 : 1.0), roomSoft(R), clamp(rough * 1.4, 0.0, 1.0));
     float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
     // the sun itself in polished steel: a sharp glint where it comes off a face toward the eye
     float glint = pow(max(dot(R, sunDir), 0.0), mix(900.0, 40.0, rough)) * sun * mix(60.0, 2.0, rough);
     if (metal > 0.5) {
       col = alb * (env + SUN * glint) * mix(1.0, ao, 0.6);
       col += alb * light * 0.1 + vec3(0.6, 0.65, 0.72) * fres * 0.8;
+      // the button: it catches the window whichever way it's turned (a small rounded barrel): a glint marks the point
+      if (M == 12) col += daylight(3.0) * (0.25 + 0.75 * pow(max(dot(R, normalize(vec3(0.0, 0.3, -1.0))), 0.0), 3.0)) * 1.3;
     } else {
       vec3 F = vec3(spec) + (1.0 - spec) * fres * (1.0 - rough);
       col = alb * light * (1.0 - metal) + metal * alb * env * ao + F * env * ao * (1.0 - metal * 0.5) + SUN * glint * spec * (1.0 - rough);

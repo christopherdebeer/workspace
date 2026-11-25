@@ -92,6 +92,8 @@ const recorder = replays ? new Recorder(bout) : null;
 
 // ─── what the eye sees ─────────────────────────────────────────────────────────────────────────────────────────────
 let look: V | null = null;
+/** the first-person eye: how far right of the head, back, down; how far right and down it looks of their chest */
+const FP = { fov: 1.3, right: 0.06, back: -0.15, down: -0.04, aimRight: 0.0, aimDown: 0.5 };
 const fovOf = () => {
   const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), wide = (Number(qs.get('fov')) || 80) * Math.PI / 180;
   return Math.min(1.66, Math.max(0.75, 2 * Math.atan(Math.tan(wide / 2) / aspect)));
@@ -113,9 +115,12 @@ function view(b: Bout): View {
   // (a tall view looks lower, so your own guard is in it; a wide one keeps their mask in it)
   // (a tighter lens than the old wide one: the opponent at a size you can read them by, your own bell coming into the
   // lower right, as it would to your eye looking past it)
-  const fp = Math.min(fov, 1.45);
-  const at = add(madd(look, me.frame.r, 0.1), [0, -0.3 * Math.min(1, (fp - 0.75) / 0.7), 0]);
-  return { eye: madd(me.eye, me.frame.r, 0.035), at, fov: fp, self: 0 };
+  // (the eye just behind and above the line of the weapon hand: your sleeve comes in from the lower right corner, the
+  // bell large, the blade going away from it toward them)
+  const fp = Math.min(fov, FP.fov);
+  const eye = add(madd(madd(me.eye, me.frame.r, FP.right), me.frame.f, FP.back), [0, FP.down, 0]);
+  const at = add(madd(look, me.frame.r, FP.aimRight), [0, -FP.aimDown * Math.min(1, (fp - 0.75) / 0.7), 0]);
+  return { eye, at, fov: fp, self: 0 };
 }
 
 // ─── replays: the touch again, slowly, from the side, with what happened written as it happens ──────────────────────
