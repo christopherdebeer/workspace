@@ -228,7 +228,7 @@ void main(){
     float nl = max(dot(N, sunDir), 0.0);
     vec3 winDir = normalize(vec3(-0.26, 0.58, -0.9));
     float fall = 1.0 / (1.0 + 0.16 * (vP.z - LO.z));
-    vec3 day = SKY * (0.12 + 0.88 * max(dot(N, winDir), 0.0)) * 1.0 * fall;
+    vec3 day = SKY * (0.075 + 1.36 * max(dot(N, winDir), 0.0)) * fall;
     vec3 amb = mix(vec3(0.041, 0.039, 0.034), vec3(0.13, 0.15, 0.17), N.y * 0.5 + 0.5);
     vec3 lamps = vec3(0.14,0.15,0.14) * max(N.y, 0.0) + vec3(0.085, 0.075, 0.060) * max(-N.y, 0.0);
     float ao = (M == 3 || M == 4 || M == 10) ? contact(vP) : 1.0;
@@ -247,6 +247,12 @@ void main(){
       vec3 F = vec3(spec) + (1.0 - spec) * fres * (1.0 - rough);
       col = alb * light * (1.0 - metal) + metal * alb * env * ao + F * env * ao * (1.0 - metal * 0.5) + SUN * glint * spec * (1.0 - rough);
       // cloth's sheen at grazing angles (the weave catching the room), and the floor's warm light from below
+      if (M == 3) {
+        // Brushed metal spreads the reflected bank along the strip; the foot shadows seat it.
+        float strip = exp(-pow(abs(R.z+0.19)/0.17,2.0));
+        float brush = vnoise(vec2(vP.x*270.0,vP.z*3.0));
+        col += SKY * strip * (0.055 + 0.055*brush) * (0.35+0.65*fres) * ao;
+      }
       if (M == 7 || M == 16) col += alb * vec3(0.13,0.14,0.15) + roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 2.0) * 0.05;
       if (M == 15 || M == 0) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.12 * vC.r + vec3(0.018, 0.014, 0.012) * max(-N.y, 0.0);
     }
@@ -272,7 +278,7 @@ export const SKIN_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
 layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex; layout(location=7) in vec2 panelUV;
 uniform mat4 vp; uniform mat4 lvp; uniform mat4 bones[15];
-uniform vec3 hem; uniform vec3 sleeveW; uniform vec3 sleeveR; uniform vec2 bend; uniform int hide;
+uniform vec3 hem; uniform vec3 sleeveW; uniform vec3 sleeveR; uniform vec2 bend; 
 out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas;
 void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
@@ -282,8 +288,7 @@ void main(){
   q -= nn * g * 0.012;
   vC = c.rgb; if (c.a > 14.5 && c.a < 15.5) vC.r *= 1.0 - 0.38 * g;
   vP = q; vN = nn; vM = c.a; vT = t; vAtlas = panelUV; vL = lvp * vec4(q, 1.0);
-  int part = int(ex.w + 0.5);
-  gl_Position = ((hide >> part) & 1) == 1 ? vec4(0.0, 0.0, 2.0, 1.0) : vp * vec4(q, 1.0);
+  gl_Position = vp * vec4(q, 1.0);
 }`;
 export const SKIN_SHADOW_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex;

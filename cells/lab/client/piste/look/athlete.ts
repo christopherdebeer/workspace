@@ -214,8 +214,11 @@ export function buildAthlete(): Athlete {
   // (heights above the pelvis: section half-widths along the shoulder line (f) and across (r), and the chest's fullness)
   const H: [number, number, number, number][] = [
     [-0.09, 0.17, 0.118, 0], [-0.03, 0.166, 0.116, 0], [0.12, 0.146, 0.106, 0.004], [0.28, 0.168, 0.129, 0.012],
-    [0.38, 0.183, 0.135, 0.01], [0.43, 0.186, 0.126, 0.004], [0.47, 0.16, 0.096, 0], [0.5, 0.115, 0.08, 0], [0.53, 0.068, 0.06, 0], [0.555, 0.062, 0.056, 0],
+    [0.38, 0.205, 0.131, 0.01], [0.43, 0.211, 0.121, 0.004], [0.47, 0.186, 0.101, 0], [0.5, 0.134, 0.083, 0], [0.53, 0.068, 0.06, 0], [0.555, 0.062, 0.056, 0],
   ];
+  // Orient each cross-section along the anatomical landmark it passes through.
+  const hipLine = norm(sub(c[9].a,c[11].a));
+  const clavicle = norm(add(sub(f.shoulder,c[7].a), scale(F.r,0.085)));
   const torsoRings: Ring[] = Array.from({ length: 68 }, (_, i) => {
     const h = -0.09 + 0.645 * i / 67;
     const section = (axis: number) => prof(H.map(row => [row[0], row[axis]]), h);
@@ -223,7 +226,8 @@ export function buildAthlete(): Athlete {
     const t = (h + 0.09) / 0.645;
     const p = madd(lerp(madd(pelvis, spine, -0.09), madd(neck, spine, 0.035), t), F.f, 0.012);
     // (the chest a little fuller in front (its front faces the fencer's left, −r), the back flatter)
-    return { c: p, u: F.f, w: F.r, r: (a: number) => {
+    const across = norm(lerp(hipLine, clavicle, smooth(blend(h, 0.04, 0.39))));
+    return { c: p, u: across, w: norm(cross(across,up)), r: (a: number) => {
       const side = Math.cos(a), front = Math.sin(a);
       const waist = pleat(h, 0.055 + 0.067 * side, 0.022) * (0.007 + 0.006 * front);
       const lower = pleat(h, -0.035 + 0.038 * Math.cos(a + 0.8), 0.016) * 0.009;
@@ -231,7 +235,7 @@ export function buildAthlete(): Athlete {
       const hem = 0.0035 * Math.exp(-((h + 0.081) ** 2) / 0.000022);
       const dr = waist + lower + reach + hem;
       return [ru + dr, rw * (front < 0 ? 1 + full * 8 * front ** 2 : 1 - 0.04 * front ** 2) + dr];
-    }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) };
+    }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) + 0.013*Math.cos(a)*Math.exp(-(((h-0.43)/0.095)**2)) };
   });
   loft(m, torsoRings, {
     panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75, 0.62], capB: true,
@@ -256,7 +260,7 @@ export function buildAthlete(): Athlete {
       const s = i / (N - 1), { p } = pa.at(s);
       const tangent = norm(sub(pa.at(Math.min(1, s+0.065)).p, pa.at(Math.max(0, s-0.065)).p));
       const [u, w] = axesAbout(tangent, F.u);
-      const r = prof([[0, 0.045], [0.07, 0.076], [0.14, 0.073], [sE - 0.06, 0.06], [sE, 0.057], [sE + 0.1, 0.055], [0.85, 0.046], [1, 0.041]], s);
+      const r = prof([[0, 0.055], [0.07, 0.082], [0.16, 0.077], [sE - 0.06, 0.06], [sE, 0.057], [sE + 0.1, 0.055], [0.85, 0.046], [1, 0.041]], s);
       rings.push({ c: p, u, w, r: a => {
         const lift = Math.cos(a + armSign * 0.6);
         const inside = 0.44 + 0.38 * lift;
@@ -271,16 +275,30 @@ export function buildAthlete(): Athlete {
     const E = pts[1], inner = norm(sub(lerp(pts[0], pts[2], 0.5), E));
     loft(m, rings, {
       panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
-      weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); return [[up1, 1 - k], [fore, k]]; },
+      weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.40 * (1 - smooth(blend(s, 0, 0.16))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
       extra: (i, j, p) => {
         const s = i / (N - 1), near = Math.max(0, 1 - Math.abs(s - sE) / 0.13), face = Math.max(0, dot(norm(sub(p, rings[i].c)), inner));
-        return [0, armSign * Math.min(1, s * 1.4) * 0.8, armSign * near * face, s < sE - 0.14 ? partTop : PART.always];
+        return [0, armSign * Math.min(1, s * 1.4) * 0.8, armSign * near * face, armSign < 0 || s < sE - 0.14 ? partTop : PART.always];
       },
     });
   };
-  const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.125);
+  const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.092);
   sleeve([madd(madd(lerp(f.shoulder, c[7].a, 0.16), up, 0.004), F.r, -0.02), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
   sleeve([madd(madd(lerp(c[7].a, f.shoulder, 0.16), up, 0.0), F.r, 0.012), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
+
+  // Breeches share a seat between both hip sockets. The lower edge rises over the outside of each thigh.
+  const seat: Ring[] = Array.from({length: 20}, (_,i) => {
+    const t=i/19;
+    const width=prof([[0,0.101],[0.28,0.166],[0.58,0.186],[1,0.153]],t);
+    const depth=prof([[0,0.071],[0.35,0.125],[0.62,0.139],[1,0.113]],t);
+    return {c:madd(pelvis,up,-0.132+0.192*t),u:hipLine,w:norm(cross(hipLine,up)),
+      lift:a=>0.045*Math.cos(a)**2*(1-t),
+      r:a=>[width,depth*(1+0.07*Math.sin(a))]};
+  });
+  loft(m,seat,{panel:2,seg:40,col:white,mat:fab,tone:TONE.breeches,seams:[],capA:true,
+    weights:(i,j)=>{const front=(1+Math.cos(j/40*2*Math.PI))*0.5;
+      const thigh=0.45*(1-i/19);return [[B.pelvis,1-thigh],[B.thighF,front*thigh],[B.thighB,(1-front)*thigh]];},
+    extra:()=>[0,0,0,PART.torso]});
 
   // ── legs: breeches full to below the knee, the band, the knee and calf under the sock, the ankle ───────────────────
   const leg = (th: number, sh: number, pole: V) => {
@@ -414,7 +432,7 @@ export function buildAthlete(): Athlete {
     const fa = norm(sub(f.hand, f.elbow)), cuffRings: Ring[] = [];
     // (flared at its edge over the sleeve, narrowing to a padded wrist, so from the eye the hand shows past it)
     for (let i = 0; i < 25; i++) { const s = i / 24, p = madd(f.hand, fa, -0.175 + s * 0.14), [u, w] = axesAbout(fa, F.u), r = prof([[0, 0.055], [0.12, 0.053], [0.5, 0.045], [0.8, 0.038], [1, 0.034]], s); cuffRings.push({ c: p, u, w, r: a => { const crease = 0.003 * pleat(s, 0.66 + 0.13*Math.sin(a), 0.055) + 0.0025*pleat(s, 0.05, 0.035); return [r+crease, r*0.94+crease]; } }); }
-    loft(m, cuffRings, { panel: 3, seg: 16, col: white, mat: fab, tone: TONE.glove, seams: [0.0], weights: (i) => [[B.foreW, 1 - i / 32], [B.handW, i / 32]] });
+    loft(m, cuffRings, { panel: 3, seg: 24, capA: true, col: white, mat: fab, tone: TONE.glove, seams: [0.0], weights: (i) => [[B.foreW, 1 - i / 32], [B.handW, i / 32]] });
     // the closed hand as a box of planes (after the hand-construction reference): its top the back of the hand, its
     // front the fingers' first segments, its sides; from the wrist to the knuckle ridge, on the outside of the grip,
     // padded a little fuller than a hand

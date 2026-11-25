@@ -50,6 +50,9 @@ export class Renderer {
   private athlete: Athlete;
   private skin: WebGLProgram; private skinShade: WebGLProgram;
   private skinVao: WebGLVertexArrayObject;
+  private fullIndex: WebGLBuffer;
+  private eyeIndex: WebGLBuffer;
+  private eyeCount: number;
   private uk: Record<string, WebGLUniformLocation | null> = {};
   private uks: Record<string, WebGLUniformLocation | null> = {};
   /** each fencer's secondary motion (a replay's copy of a fencer gets its own) */
@@ -89,13 +92,30 @@ export class Renderer {
     }
     gl.activeTexture(gl.TEXTURE0);
     this.skinShade = program(gl, SKIN_SHADOW_VS, SHADOW_FS);
-    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'hide']) this.uk[k] = gl.getUniformLocation(this.skin, k);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend']) this.uk[k] = gl.getUniformLocation(this.skin, k);
     for (const k of ['lvp', 'bones', 'hem']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
     this.athlete = buildAthlete();
     this.skinVao = gl.createVertexArray()!;
     gl.bindVertexArray(this.skinVao);
     const vb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, this.athlete.verts, gl.STATIC_DRAW);
-    const ib = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.athlete.index, gl.STATIC_DRAW);
+    // Exclude whole triangles when looking through the athlete's eyes. Moving one vertex
+    // out of frame stretches the remaining sleeve triangles across the foreground.
+    const { verts, index } = this.athlete;
+    const eyeIndices: number[] = [];
+    const visible = (vertex: number) => {
+      const part = verts[vertex * SKIN_STRIDE + 23];
+      return part === PART.always || part === PART.upperSleeve;
+    };
+    for (let i = 0; i < index.length; i += 3) {
+      if (visible(index[i]) && visible(index[i + 1]) && visible(index[i + 2])) {
+        eyeIndices.push(index[i], index[i + 1], index[i + 2]);
+      }
+    }
+    this.eyeCount = eyeIndices.length;
+    this.eyeIndex = gl.createBuffer()!;
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.eyeIndex);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(eyeIndices), gl.STATIC_DRAW);
+    const ib = this.fullIndex = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.athlete.index, gl.STATIC_DRAW);
     const st = SKIN_STRIDE * 4;
     [[0, 3, 0], [1, 3, 12], [2, 4, 24], [3, 2, 40], [4, 4, 48], [5, 4, 64], [6, 4, 80], [7, 2, 96]].forEach(([l, n, o]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, st, o); });
     gl.bindVertexArray(null);
@@ -163,6 +183,7 @@ export class Renderer {
     gl.useProgram(this.skinShade);
     gl.uniformMatrix4fv(this.uks.lvp, false, lvp);
     gl.bindVertexArray(this.skinVao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.fullIndex);
     poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); gl.uniform3fv(this.uks.hem, ps.hem); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
@@ -205,9 +226,10 @@ export class Renderer {
     poses.forEach((ps, i) => {
       gl.uniformMatrix4fv(U.bones, false, this.bones[i]);
       gl.uniform3fv(U.hem, ps.hem); gl.uniform3fv(U.sleeveW, ps.sleeve[0]); gl.uniform3fv(U.sleeveR, ps.sleeve[1]); gl.uniform2fv(U.bend, ps.bend);
-      // (looking out of this one: not its head, its torso, its rear arm, the top of its own sleeve)
-      gl.uniform1i(U.hide, i === view.self ? (1 << PART.head) | (1 << PART.torso) | (1 << PART.rearArm) | (1 << PART.upperSleeve) : 0);
-      gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0);
+      // The first-person sleeve continues through the elbow to the edge of the frame.
+      const firstPerson = i === view.self;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, firstPerson ? this.eyeIndex : this.fullIndex);
+      gl.drawElements(gl.TRIANGLES, firstPerson ? this.eyeCount : this.athlete.count, gl.UNSIGNED_INT, 0);
     });
     // the contact capsules over them (debug)
     if (view.bodies) {
