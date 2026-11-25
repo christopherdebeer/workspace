@@ -5,11 +5,14 @@
  */
 import { type V, add, cross, dot, len, madd, norm, scale, sub } from '../v3';
 
-export const STRIDE = 10;
+/** floats a vertex: place, normal, colour, material, and two for a fabric's own coordinates (metres across, along) */
+export const STRIDE = 12;
 /** what a surface is made of (the shader's branches) */
 export const MAT = {
   cloth: 0, blade: 1, bell: 2, piste: 3, floor: 4, paint: 5, window: 6, mesh: 7, rubber: 8, skin: 9, line: 10,
   lamp: 11, button: 12, glove: 13, wood: 14,
+  /** simulated cloth: its colour slots carry (fold shade, distance to a seam in m, 0), its uv the weave's coordinates */
+  fabric: 15,
 } as const;
 export type C = [number, number, number];
 
@@ -19,11 +22,18 @@ export class Mesh {
   constructor(size = 60000) { this.data = new Float32Array(STRIDE * size); }
   reset() { this.n = 0; }
   private grow() { const d = new Float32Array(this.data.length * 2); d.set(this.data); this.data = d; }
-  vert(p: V, nr: V, c: C, mat: number) {
+  vert(p: V, nr: V, c: C, mat: number, u = 0, w = 0) {
     if ((this.n + 1) * STRIDE > this.data.length) this.grow();
     const o = this.n++ * STRIDE, d = this.data;
     d[o] = p[0]; d[o + 1] = p[1]; d[o + 2] = p[2]; d[o + 3] = nr[0]; d[o + 4] = nr[1]; d[o + 5] = nr[2];
-    d[o + 6] = c[0]; d[o + 7] = c[1]; d[o + 8] = c[2]; d[o + 9] = mat;
+    d[o + 6] = c[0]; d[o + 7] = c[1]; d[o + 8] = c[2]; d[o + 9] = mat; d[o + 10] = u; d[o + 11] = w;
+  }
+  /** a vertex straight from flat arrays (the cloth's hot path) */
+  vraw(x: number, y: number, z: number, nx: number, ny: number, nz: number, c0: number, c1: number, c2: number, mat: number, u: number, w: number) {
+    if ((this.n + 1) * STRIDE > this.data.length) this.grow();
+    const o = this.n++ * STRIDE, d = this.data;
+    d[o] = x; d[o + 1] = y; d[o + 2] = z; d[o + 3] = nx; d[o + 4] = ny; d[o + 5] = nz;
+    d[o + 6] = c0; d[o + 7] = c1; d[o + 8] = c2; d[o + 9] = mat; d[o + 10] = u; d[o + 11] = w;
   }
   /** a flat triangle (its own normal, facing away from `out` if given the wrong way round) */
   tri(a: V, b: V, c: V, col: C, mat: number) {

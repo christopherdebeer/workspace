@@ -10,6 +10,8 @@ import type { Bout } from './bout';
 import { Mesh, MAT, STRIDE } from './look/mesh';
 import { buildSalle } from './look/salle';
 import { dressFencer } from './look/figure';
+import { Wardrobe } from './look/cloth';
+import type { Fencer } from './fencer';
 import { MAIN_VS, MAIN_FS, SHADOW_VS, SHADOW_FS } from './look/shaders';
 import { type V, cross, dot, norm, sub } from './v3';
 
@@ -38,6 +40,10 @@ export class Renderer {
   private us: Record<string, WebGLUniformLocation | null> = {};
   private shadowTex: WebGLTexture; private shadowFb: WebGLFramebuffer;
   exposure = 1.05;
+  /** each fencer's clothes (a replay's copy of a fencer gets its own) */
+  private wardrobes = new WeakMap<Fencer, Wardrobe>();
+  /** time spent on cloth and dressing, last frame, ms (for a readout) */
+  dressMs = 0;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -72,6 +78,16 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST);
   }
 
+  /** step the fencers' clothes to the bout's time without drawing (for a page run on to a moment: the cloth arrives
+   * with its motion, not freshly hung) */
+  simulate(bout: Bout) {
+    for (const f of bout.fencers) {
+      let w = this.wardrobes.get(f);
+      if (!w) { w = new Wardrobe(f); this.wardrobes.set(f, w); }
+      w.update(f, bout.t);
+    }
+  }
+
   resize(dpr: number) {
     const c = this.canvas, w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -80,7 +96,14 @@ export class Renderer {
   draw(bout: Bout, view: View) {
     const gl = this.gl, m = this.mesh;
     m.reset();
-    bout.fencers.forEach((f, i) => dressFencer(m, f, i === view.self, i * 101 + 7));
+    const t0 = performance.now();
+    bout.fencers.forEach((f, i) => {
+      let w = this.wardrobes.get(f);
+      if (!w) { w = new Wardrobe(f); this.wardrobes.set(f, w); }
+      w.update(f, bout.t);
+      dressFencer(m, f, i === view.self, i * 101 + 7, w);
+    });
+    this.dressMs = performance.now() - t0;
     for (const k of view.marks ?? []) m.ellipsoid(k.p, [k.r, 0, 0], [0, k.r, 0], [0, 0, k.r], 10, 7, () => [k.c, MAT.lamp]);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf);
     gl.bufferData(gl.ARRAY_BUFFER, m.data.subarray(0, m.n * STRIDE), gl.DYNAMIC_DRAW);
@@ -140,6 +163,7 @@ function vao(gl: WebGL2RenderingContext, buf: WebGLBuffer) {
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE * 4, 0);
   gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, STRIDE * 4, 12);
   gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, STRIDE * 4, 24);
+  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, STRIDE * 4, 40);
   gl.bindVertexArray(null);
   return a;
 }

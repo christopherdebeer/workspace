@@ -13,6 +13,7 @@
  */
 import type { Fencer } from '../fencer';
 import { Mesh, MAT, type C, around, hash3 } from './mesh';
+import type { Garment, Wardrobe } from './cloth';
 import { type V, add, cross, dot, len, lerp, madd, norm, scale, sub } from '../v3';
 
 const KIT = {
@@ -27,43 +28,80 @@ const KIT = {
 /** cloth's planes: a little lighter or darker face by face, as paint lays them */
 const facet = (seed: number) => (i: number, j: number) => 0.965 + 0.07 * hash3(seed, i * 7 + 1, j * 13 + 5);
 
-export function dressFencer(m: Mesh, f: Fencer, self: boolean, seed: number) {
+export function dressFencer(m: Mesh, f: Fencer, self: boolean, seed: number, wardrobe?: Wardrobe) {
   const c = f.capsules, F = f.frame, up: V = [0, 1, 0];
-  if (!self) {
-    torso(m, f, seed);
-    mask(m, f);
-  }
-  // the weapon arm: sleeve to the wrist, the glove over it
   const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.045);
-  // (looking out of this one: the sleeve from partway down the upper arm, which is all of it the eye can see)
-  const top = self ? lerp(f.shoulder, f.elbow, 0.5) : madd(f.shoulder, norm(sub(f.shoulder, f.elbow)), 0.03);
-  limb(m, [top, f.elbow, wrist], [self ? 0.078 : 0.09, 0.07, 0.05], KIT.jacket, seed + 11, F.u, [1]);
+  if (wardrobe) {
+    // the cloth: the jacket and the knickers as simulated (looking out of this one, only the weapon sleeve's lower part)
+    const [jacket, sleeve, rearSleeve, leg, rearLeg] = wardrobe.garments;
+    if (self) drawGarment(m, sleeve, 0, 4);
+    else {
+      drawGarment(m, jacket, 0); drawGarment(m, sleeve, 0); drawGarment(m, rearSleeve, 0); drawGarment(m, leg, 1); drawGarment(m, rearLeg, 1);
+      // under the cloth, a slimmer body (it never shows unless the cloth parts): torso, seat, arms, thighs
+      underBody(m, f, seed);
+    }
+  } else {
+    if (!self) torso(m, f, seed);
+    const top = self ? lerp(f.shoulder, f.elbow, 0.5) : madd(f.shoulder, norm(sub(f.shoulder, f.elbow)), 0.03);
+    limb(m, [top, f.elbow, wrist], [self ? 0.078 : 0.09, 0.07, 0.05], KIT.jacket, seed + 11, F.u, [1]);
+  }
+  if (!self) mask(m, f);
   glove(m, f, wrist, seed);
-  // the rear arm, and its bare hand
   if (!self) {
     const rs = c[3].b, re = c[7].b, rh = c[8].b;
-    limb(m, [rs, re, rh], [0.082, 0.064, 0.046], KIT.jacket, seed + 23, F.u, [1]);
+    if (!wardrobe) limb(m, [rs, re, rh], [0.082, 0.064, 0.046], KIT.jacket, seed + 23, F.u, [1]);
     // the bare rear hand, relaxed: a palm, the fingers curled a little, a thumb
     const hd = norm(sub(rh, re)), [hu, hw] = around(hd, F.r);
     m.ellipsoid(madd(rh, hd, 0.045), scale(hd, 0.05), scale(hu, 0.022), scale(hw, 0.04), 10, 6, () => [KIT.skin, MAT.skin]);
     m.ellipsoid(madd(madd(rh, hd, 0.1), hu, -0.006), scale(hd, 0.035), scale(hu, 0.018), scale(hw, 0.036), 8, 5, () => [KIT.skin, MAT.skin]);
     m.ellipsoid(madd(madd(rh, hd, 0.05), hw, 0.04), scale(hd, 0.03), scale(hu, 0.013), scale(hw, 0.013), 6, 4, () => [KIT.skin, MAT.skin]);
   }
-  // legs: knickers to below the knee, a band, long socks; then the shoes
+  // legs: below the knickers' band the socks over the calf, the knee as a joint above them; then the shoes
   for (const [th, sh, ft] of [[c[9], c[10], c[13]], [c[11], c[12], c[14]]] as const) {
     const hip = th.a, knee = th.b, ankle = madd(sh.b, up, 0.035);
     const below = lerp(knee, ankle, 0.14);
-    // knickers full to below the knee, a band; socks with the calf under them
-    limb(m, [madd(hip, up, 0.06), lerp(hip, knee, 0.45), knee, below], [0.13, 0.12, 0.092, 0.08], KIT.knickers, seed + 31, F.f, [2]);
-    limb(m, [lerp(knee, ankle, 0.1), lerp(knee, ankle, 0.17)], [0.078, 0.076], [KIT.knickers[0] * 0.92, KIT.knickers[1] * 0.92, KIT.knickers[2] * 0.92], seed + 37, F.f);
-    limb(m, [lerp(knee, ankle, 0.15), lerp(knee, ankle, 0.42), lerp(knee, ankle, 0.8), ankle], [0.066, 0.068, 0.05, 0.044], KIT.sock, seed + 41, F.f);
+    if (!wardrobe) {
+      limb(m, [madd(hip, up, 0.06), lerp(hip, knee, 0.45), knee, below], [0.13, 0.12, 0.092, 0.08], KIT.knickers, seed + 31, F.f, [2]);
+      limb(m, [lerp(knee, ankle, 0.1), lerp(knee, ankle, 0.17)], [0.078, 0.076], [KIT.knickers[0] * 0.92, KIT.knickers[1] * 0.92, KIT.knickers[2] * 0.92], seed + 37, F.f);
+    }
+    limb(m, [lerp(knee, ankle, 0.15), lerp(knee, ankle, 0.42), lerp(knee, ankle, 0.8), ankle], [0.062, 0.066, 0.049, 0.043], KIT.sock, seed + 41, F.f, [], 10);
     shoe(m, ft.a, ft.b);
   }
   weapon(m, f, seed);
 }
 
+/** a garment as it hangs this frame: smooth normals, the fabric's coordinates and its seams for the shader */
+function drawGarment(m: Mesh, g: Garment, tone: number, fromRow = 0) {
+  const { rows, cols } = g.spec, x = g.x, n = g.nrm;
+  const v = (i: number, j: number) => {
+    const q = i * cols + (j % cols), k = q * 3;
+    m.vraw(x[k], x[k + 1], x[k + 2], n[k], n[k + 1], n[k + 2], g.shade[q], g.seam[q], tone, MAT.fabric, j === cols ? g.fu[q] + g.fu[i * cols + 1] * cols : g.fu[q], g.fv[q]);
+  };
+  for (let i = fromRow; i < rows - 1; i++) for (let j = 0; j < cols; j++) {
+    v(i, j); v(i + 1, j); v(i + 1, j + 1);
+    v(i, j); v(i + 1, j + 1); v(i, j + 1);
+  }
+}
+
+/** the body under the cloth: slimmer than the cloth can come in to, so it only fills a gap; the joints (knee, elbow)
+ * shaped as joints where the cloth lies on them */
+function underBody(m: Mesh, f: Fencer, seed: number) {
+  const c = f.capsules, F = f.frame;
+  const fill: C = [KIT.jacket[0] * 0.8, KIT.jacket[1] * 0.8, KIT.jacket[2] * 0.8];
+  limb(m, [c[0].a, c[0].b, c[1].b], [0.15, 0.16, 0.06], fill, seed + 61, F.f, [], 6);
+  m.ellipsoid(madd(c[0].a, [0, 1, 0], -0.05), scale(F.f, 0.16), [0, 0.11, 0], scale(F.r, 0.14), 10, 6, () => [KIT.knickers, MAT.cloth]);
+  limb(m, [c[4].a, c[4].b, c[5].b], [0.055, 0.045, 0.04], fill, seed + 63, F.u, [], 6);
+  limb(m, [c[7].a, c[7].b, c[8].b], [0.05, 0.042, 0.036], fill, seed + 65, F.u, [], 6);
+  for (const k of [9, 11]) {
+    limb(m, [c[k].a, c[k].b], [0.085, 0.06], fill, seed + 67 + k, F.f, [], 6);
+    // the knee: a cap at the front of the joint, under the knickers' fall
+    const knee = c[k].b, shin = norm(sub(c[k + 1].b, knee)), thigh = norm(sub(c[k].a, knee)), front = norm(scale(add(shin, thigh), -1));
+    m.ellipsoid(madd(knee, front, 0.03), scale(front, 0.04), scale(shin, 0.05), scale(norm(cross(front, shin)), 0.05), 8, 5, () => [KIT.knickers, MAT.cloth]);
+  }
+}
+
 /** a limb through joints: faceted rings, the faces lit plane by plane */
-function limb(m: Mesh, pts0: V[], radii0: number[], col: C, seed: number, hint: V, creaseAt: number[] = []) {
+function limb(m: Mesh, pts0: V[], radii0: number[], col: C, seed: number, hint: V, creaseAt: number[] = [], seg = 12) {
   // (between joints a fuller ring (the cloth over the muscle); at a bending joint a crease: a pinched ring between two
   // full ones, which the soft normals turn into a fold line, as the painted study draws an elbow)
   const pts: V[] = [], radii: number[] = [];
@@ -82,7 +120,7 @@ function limb(m: Mesh, pts0: V[], radii0: number[], col: C, seed: number, hint: 
     const [u, w] = around(d, hint);
     rings.push({ c: pts[i], u, w, ru: radii[i], rw: radii[i] * 0.93 });
   }
-  m.tube(rings, 12, col, MAT.cloth, { jit: 0.07, seed, capA: true, capB: true, shade: facet(seed), soft: 0.88 });
+  m.tube(rings, seg, col, MAT.cloth, { jit: seg > 8 ? 0.07 : 0, seed, capA: true, capB: true, shade: facet(seed), soft: 0.88 });
 }
 
 /** the torso, side on: an elliptical body, wide along the shoulder line (down the piste), narrow across */
@@ -115,7 +153,7 @@ function torso(m: Mesh, f: Fencer, seed: number) {
 function mask(m: Mesh, f: Fencer) {
   const h = f.capsules[2], c = lerp(h.a, h.b, 0.5), F = f.frame;
   const fwd = F.f, up: V = [0, 1, 0];
-  m.ellipsoid(madd(c, up, 0.01), scale(fwd, 0.125), scale(up, 0.155), scale(F.r, 0.112), 14, 10, (d) =>
+  m.ellipsoid(madd(c, up, 0.01), scale(fwd, 0.125), scale(up, 0.155), scale(F.r, 0.112), 12, 8, (d) =>
     d[1] > -0.75 ? [KIT.mesh, MAT.mesh] : [KIT.trim, MAT.cloth]);
   // the bib: a padded flap from under the chin down over the collar
   // (the bib flares from under the chin over the collar: a padded apron, two planes and a fold)
@@ -180,7 +218,7 @@ function weapon(m: Mesh, f: Fencer, seed: number) {
   const r = b.weapon.guardR, h = b.weapon.guardDepth, R = (r * r + h * h) / (2 * h), th0 = Math.asin(Math.min(1, r / R));
   const off = add(scale(thumb, -0.016), scale(side, -0.009));
   const apex = add(G, off), C0 = madd(apex, ax, -R);
-  const seg = 30, rings = 8;
+  const seg = 24, rings = 7;
   const pt = (i: number, j: number) => {
     const t = (i / rings) * th0, p = (j / seg) * Math.PI * 2;
     const d = norm(add(scale(ax, Math.cos(t)), add(scale(thumb, Math.sin(t) * Math.cos(p)), scale(side, Math.sin(t) * Math.sin(p)))));
@@ -194,7 +232,7 @@ function weapon(m: Mesh, f: Fencer, seed: number) {
     m.stri(a.p, bb.p, c.p, a.n, bb.n, c.n, KIT.bell, MAT.bell);
     m.stri(a.p, c.p, d.p, a.n, c.n, d.n, KIT.bell, MAT.bell);
     // (inside: polished steel as well, hammered the same way; the dark pad only round the middle, where the hand is)
-    const ni = (q: V): V => scale(q, -1), padded = i < 6;
+    const ni = (q: V): V => scale(q, -1), padded = i < 5;
     const ic: C = padded ? KIT.pad : [KIT.bell[0] * 0.72, KIT.bell[1] * 0.72, KIT.bell[2] * 0.74], im = padded ? MAT.rubber : MAT.bell;
     m.stri(a.pin, c.pin, bb.pin, ni(a.n), ni(c.n), ni(bb.n), ic, im);
     m.stri(a.pin, d.pin, c.pin, ni(a.n), ni(d.n), ni(c.n), ic, im);

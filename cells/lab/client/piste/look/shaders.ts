@@ -18,15 +18,15 @@ const v3 = (c: number[]) => `vec3(${c.map(f).join(',')})`;
 const R = ROOM;
 
 export const MAIN_VS = `#version 300 es
-layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c;
+layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
 uniform mat4 vp; uniform mat4 lvp;
-out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL;
-void main(){ vP = p; vN = n; vC = c.rgb; vM = c.a; vL = lvp * vec4(p, 1.0); gl_Position = vp * vec4(p, 1.0); }`;
+out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT;
+void main(){ vP = p; vN = n; vC = c.rgb; vM = c.a; vT = t; vL = lvp * vec4(p, 1.0); gl_Position = vp * vec4(p, 1.0); }`;
 
 export const MAIN_FS = `#version 300 es
 precision highp float;
 precision highp sampler2DShadow;
-in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL;
+in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL; in vec2 vT;
 uniform vec3 eye; uniform vec3 sunDir; uniform sampler2DShadow shadow; uniform float exposure;
 uniform vec4 feet[4]; uniform vec4 tips[2]; uniform vec3 bladeA[2]; uniform vec3 bladeB[2];
 out vec4 o;
@@ -146,6 +146,20 @@ void main(){
     wire = mix(0.42, wire, seen);
     alb = mix(vec3(0.03, 0.03, 0.035), vec3(0.34, 0.34, 0.36), wire); rough = 0.35; spec = 0.12;
   }
+  else if (M == 15) { // cloth: slightly greyed white; a fine weave where it can be seen; seams stitched; folds shaded
+    float shade = vC.r, seamD = vC.g;
+    alb = mix(vec3(0.66, 0.655, 0.625), vec3(0.62, 0.615, 0.59), vC.b);
+    vec2 q = vT * 700.0; vec2 fw = fwidth(q);
+    float seen = clamp(1.0 - max(fw.x, fw.y) * 0.9, 0.0, 1.0);
+    float weave = sin(q.x * 6.2832) * sin(q.y * 6.2832) * 0.5 + sin((q.x + q.y) * 3.1416) * 0.5;
+    alb *= 1.0 + 0.07 * weave * seen;
+    // the seam: a narrow darker line, stitched
+    float sl = smoothstep(0.0045, 0.0018, seamD), st = step(0.5, fract(vT.y * 110.0));
+    alb *= 1.0 - sl * (0.22 + 0.12 * st);
+    // folds and contact: darker and cooler where it's shut in
+    alb *= shade; alb = mix(alb * vec3(0.86, 0.9, 1.04), alb, shade);
+    rough = 0.85; spec = 0.035;
+  }
   else if (M == 13) { rough = 0.6; spec = 0.05; }
   else if (M == 14) { rough = 0.45; spec = 0.05; }
   else if (M == 8) { rough = 0.55; spec = 0.05; }
@@ -177,6 +191,8 @@ void main(){
     } else {
       vec3 F = vec3(spec) + (1.0 - spec) * fres * (1.0 - rough);
       col = alb * light * (1.0 - metal) + metal * alb * env * ao + F * env * ao * (1.0 - metal * 0.5) + SUN * glint * spec * (1.0 - rough);
+      // cloth's sheen at grazing angles (the weave catching the room), and the floor's warm light from below
+      if (M == 15 || M == 0) col += roomSoft(R) * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.12 * vC.r + vec3(0.06, 0.04, 0.028) * max(-N.y, 0.0);
     }
   }
   // haze: the far room toward the air's colour, a little greyer

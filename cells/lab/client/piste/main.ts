@@ -103,7 +103,9 @@ function view(b: Bout): View {
   if (viewMode === 'side') {
     const mid = (me.s + op.s) / 2;
     // (from under the windows, the dark wall behind them: the room is 7.2 m across)
-    return { eye: [mid, 1.2, -3.2], at: [mid, 0.95, 0], fov: Math.min(1.3, fov * 1.15), self: -1 };
+    // (wide enough to hold both fencers whatever the screen's shape)
+    const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), span = Math.abs(op.s - me.s) + 1.8;
+    return { eye: [mid, 1.2, -3.2], at: [mid, 0.95, 0], fov: clamp(2 * Math.atan(span / 2 / 3.2 / aspect), 0.7, 2.0), self: -1 };
   }
   // (the head watches their chest and their guard, a little below the horizon; it turns slowly, as a head does)
   const want = lerp(add(op.capsules[0].b, [0, -0.15, 0]), op.blade.guard, 0.35);
@@ -292,7 +294,7 @@ function tick(dt: number, record: boolean) {
 }
 // (run on first, for a still)
 const t0 = Number(qs.get('t') ?? 0) || 0;
-for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); }
+for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); if (s > t0 - 1.5) renderer.simulate(bout); }
 recorder?.reset();
 
 let last = performance.now(), rate = 1;
