@@ -5,7 +5,7 @@
 import { build } from 'esbuild';
 import { checks } from './harness.mjs';
 const lab = new URL('../client/piste/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './box'; export * from './intent'; export * from './v3'; export * from './blade'; export * from './contact'; export * from './lessons'; export * from './replay'; export * from './time'; export * from './fencer'; export * from './ai';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './box'; export * from './intent'; export * from './v3'; export * from './blade'; export * from './contact'; export * from './lessons'; export * from './replay'; export * from './time'; export * from './fencer'; export * from './ai'; export { GAIN } from './input';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const { Bout, EPEE, FOIL, Opponent, SPARRING, LEVELS, Box, award, idle, LESSONS, LessonRunner, Recorder, cloneBout, TimeDirector, aimAt, add, lerp, reachFor, openTarget, TARGETS, toLocal, norm, sub, FATIGUE, Dummy } = M;
 const c = checks();
@@ -191,24 +191,30 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   c.ok('bullet time: with no assist it never slows', never === 1, never);
 }
 
-// the lessons: for each, a student doing it right passes its repetitions, and one doing it wrong is told what was wrong
-// (the scripted students watch their point and correct it, as a person does)
+// the lessons: for each, a student doing it right passes its repetitions, and one doing it wrong is told what was wrong.
+// The scripted students do only what thumbs can (their right thumb's travel mapped exactly as input.ts maps it), react
+// in a quarter of a second, and watch their point and correct it, as a person does.
 {
   const chest = (f) => lerp(f.capsules[0].a, f.capsules[0].b, M.TORSO_AT);
-  const steer = (me, p, st) => {
-    const e = Math.max(0.15, Math.min(1, reachFor(me, p))), a = aimAt(me, p, e), F = { ...me.frame, o: [0, 0, 0] }, g = me.blade.guard, loc = (d) => toLocal(F, norm(d));
+  const steer = (me, p, st, ext) => {
+    const e = ext ?? Math.max(0.15, Math.min(1, reachFor(me, p))), a = aimAt(me, p, e), F = { ...me.frame, o: [0, 0, 0] }, g = me.blade.guard, loc = (d) => toLocal(F, norm(d));
     const w = loc(sub(p, g)), h = loc(sub(me.blade.tip, g)), cl = (x) => Math.max(-0.35, Math.min(0.35, x));
     st.c ??= [0, 0];
     if (me.extension > 0.3) st.c = [cl(st.c[0] + (Math.atan2(w[2], w[0]) - Math.atan2(h[2], h[0])) * 0.15), cl(st.c[1] + (Math.atan2(w[1], Math.hypot(w[0], w[2])) - Math.atan2(h[1], Math.hypot(h[0], h[2]))) * 0.15)];
     return { extend: e, hand: a.hand, point: [a.point[0] + st.c[0], a.point[1] + st.c[1]] };
   };
+  // (a right thumb's travel, x right and y up, at most 1.25 of its reach, as input.ts maps it)
+  const thumb = (x, y) => { const l = Math.hypot(x, y); if (l > 1.25) { x *= 1.25 / l; y *= 1.25 / l; } const G = M.GAIN, hx = x * G.across; return { hand: [hx, y * G.rise], point: [-Math.atan(hx / G.aimDist) * G.hold + x * G.nudge, y * G.tilt] }; };
+  // (a riposte or a hit at an open target on the trunk, with as much arm as the distance wants, lunging if out of reach)
+  const atOpen = (me, them, st) => { if (st.tg === undefined) { st.tg = openTarget(me, them); if (TARGETS[st.tg].name === 'thigh') st.tg = 1; } const tg = TARGETS[st.tg].at(them), I = steer(me, tg, st); st.lunge ??= reachFor(me, tg) > 1.02; return { ...I, lunge: st.lunge && me.extension > 0.7 }; };
   function lesson(id, bot, reps) {
     const b = new Bout({ weapon: EPEE, to: 5, referee: false }), run = new LessonRunner(b, LESSONS.find((l) => l.id === id), 3);
     run.pace = 1; run.begin();
     const res = []; let st = {}, n = 0;
-    while (res.length < reps && n++ < 60 * 120) {
+    while (res.length < reps && n++ < 60 * 150) {
       const [me, them] = b.fencers;
       if (run.stage === 'set') st = {};
+      st.t = (st.t ?? -DT) + DT;
       me.intent = { ...idle(), ...(run.frozen ? {} : bot(me, them, run.c, st)) }; them.intent = { ...run.coach.intent(DT) };
       b.advance(DT); run.hear(b.drain());
       const before = run.reps; run.update(DT, DT);
@@ -224,14 +230,14 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   const mirror = (me, them, c, st) => { if (them.act && st.seen === undefined) { st.seen = c.since; st.kind = them.act.kind === 'advance' ? 'retreat' : 'advance'; } if (st.seen !== undefined && !st.done && c.since - st.seen > 0.25) { st.done = true; return { step: st.kind }; } return {}; };
   const thrust = (me, them) => ({ extend: 1, ...aimAt(me, chest(them), 1) });
   const lungeRight = (me, them) => ({ ...thrust(me, them), lunge: me.extension > 0.75 });
-  const parryBot = (side, far = 0.3) => (me, them, c, st) => {
+  // (a parry: hold `hold` till their attack, a quarter-second to react, the thumb to `to`, then the riposte)
+  const parryBot = (to, hold) => (me, them, c, st) => {
     const w = c.w;
     if (w.attackAt !== null && st.go === undefined) st.go = w.attackAt + 0.25;
     if (w.attackAt !== null && w.clashes.some((k) => k.at >= w.attackAt + 0.05) && st.rip === undefined) st.rip = c.since + 0.05;
-    // (the riposte: to whatever their bell leaves open, with as much arm as the distance wants)
-    if (st.rip !== undefined && c.since > st.rip) { st.tg ??= openTarget(me, them); const I = steer(me, TARGETS[st.tg].at(them), st); st.lunge ??= c.bout.gap > 1.0 && I.extend >= 1; return { ...I, lunge: st.lunge && me.extension > 0.7 }; }
-    if (st.go !== undefined && c.since > st.go) { const hx = side * far; return { hand: [hx, 0], point: [-Math.atan(hx / 1.6) * 0.6, 0] }; }
-    return {};
+    if (st.rip !== undefined && c.since > st.rip) return atOpen(me, them, st);
+    if (st.go !== undefined && c.since > st.go) return thumb(...to);
+    return hold ? thumb(...hold) : {};
   };
   const arm = (them) => lerp(them.hand, them.elbow, 0.45);
   expect('mirroring their steps keeps the distance', 'distance', mirror, true, 'in distance');
@@ -242,13 +248,36 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   expect('feet before the arm is told so', 'lunge', (me, them, c) => ({ ...thrust(me, them), extend: c.since > 0.2 ? 1 : 0, lunge: true }), false, 'feet first');
   expect('advance then lunge touches', 'advance-lunge', (me, them, c, st) => { if (!st.adv) { st.adv = true; return { step: 'advance' }; } return c.since > 0.45 ? lungeRight(me, them) : {}; }, true, 'touch');
   expect('lunging without the advance is short', 'advance-lunge', lungeRight, false, 'short');
-  expect('parry quarte and riposte', 'quarte', parryBot(-1), true, 'quarte, riposte');
-  expect('no parry is touched', 'quarte', () => ({}), false, 'touched');
-  expect('the wrong side is touched', 'quarte', parryBot(1), false, 'touched');
+  expect('parry quarte (thumb left) and riposte', 'quarte', parryBot([-1, 0]), true, 'quarte, riposte');
+  expect('no parry is touched', 'quarte', () => ({}), false, 'touched', 2);
+  expect('the wrong side is touched', 'quarte', parryBot([0.6, 0]), false, 'touched', 2);
+  expect('from quarte, parry sixte (thumb back right) as they go round, and riposte', 'sixte', parryBot([0.3, 0], [-0.8, 0]), true, 'sixte, riposte');
+  expect('holding quarte and not parrying is touched', 'sixte', parryBot([-0.8, 0], [-0.8, 0]), false, undefined, 2);
+  expect('parry septime (thumb down and left) and riposte', 'septime', parryBot([-1, -0.75]), true, 'septime, riposte');
+  expect('no parry is touched', 'septime', () => ({}), false, 'touched', 2);
+  expect('a high parry is told it was high', 'septime', parryBot([-1, 0]), false, 'touched', 2);
+  expect('parry octave (thumb down) and riposte (most repetitions)', 'octave', parryBot([0, -1.25]), true, 'octave, riposte', 3, 2);
+  expect('no parry fails', 'octave', () => ({}), false, undefined, 2);
   expect('a stop-hit to the arm as they step', 'stop-hit', (me, them, c, st) => (c.rep.stepAt != null ? steer(me, arm(them), st) : {}), true, 'stop-hit');
   expect('a stop-hit into their attack is late', 'stop-hit', (me, them, c) => (c.w.attackAt != null && c.since - c.w.attackAt > 0.12 ? { extend: 1, ...aimAt(me, arm(them), 1) } : {}), false, 'late');
   expect('a line set before they step: they walk onto it (most repetitions)', 'line', (me, them, c, st) => ({ ...steer(me, chest(them), st), extend: 1 }), true, 'onto your line', 3, 2);
   expect('no line is told so', 'line', () => ({}), false, undefined, 2);
+  const beat = (me, them, c, st) => { if (st.t < 0.5) return {}; if (st.t < 0.7 && !c.w.clashes.some((k) => k.at > 0.25)) return { ...thumb(-1, 0), extend: 0.3 }; const I = atOpen(me, them, st); return { ...I, extend: Math.max(I.extend, 0.6), lunge: me.extension > 0.55 && st.lunge }; };
+  expect('a sharp beat (thumb left), then the lunge', 'beat', beat, true, 'beat, touch');
+  expect('attacking straight into their line is a double', 'beat', (me, them, c, st) => ({ ...steer(me, chest(them), st, 1), lunge: me.extension > 0.6 }), false, 'coup double', 2);
+  const slip = (me, them, c, st) => { const w = c.w; if (w.attackAt === null) return {}; const s = c.since - w.attackAt; if (s < 0.18) return {}; if (s < 0.33) return thumb(-0.6, -1); return atOpen(me, them, st); };
+  expect('as they go for the blade, under it (thumb down and left) and hit', 'disengage', slip, true, 'disengage, touch');
+  expect('leaving the blade there, it\'s found', 'disengage', () => ({}), false, 'found', 2);
+  const feint = (me, them, st) => ({ ...steer(me, chest(them), st), extend: 0.6, step: st.stepped ? null : (st.stepped = true, 'advance') });
+  const onetwo = (me, them, c, st) => { if (st.t < 0.5) return {}; const w = c.w; if (w.attackAt === null || c.since < w.attackAt + 0.1) return feint(me, them, st); if (c.since < w.attackAt + 0.25) return { ...thumb(-1, -0.75), extend: 0.6 }; st.tg ??= openTarget(me, them); return { ...steer(me, TARGETS[st.tg].at(them), st, 1), lunge: me.extension > 0.7 }; };
+  expect('feint with an advance, round their parry (thumb down and left), lunge', 'one-two', onetwo, true, 'one-two', 2);
+  expect('a feint left there is parried', 'one-two', (me, them, c, st) => (st.t < 0.5 ? {} : feint(me, them, st)), false, 'parried', 2);
+  const second = (me, them, c, st) => { if (st.t < 0.5) return {}; const r = c.rep, w = c.w;
+    if (r.ripAt === undefined || c.since < r.ripAt + 0.2) return { ...steer(me, chest(them), st, 1), lunge: me.extension > 0.6 };
+    if (!w.clashes.some((k) => k.at >= r.ripAt + 0.05)) return { ...thumb(-1, 0), extend: 0.3, lunge: true };
+    st.tg ??= openTarget(me, them); return { ...steer(me, TARGETS[st.tg].at(them), st), lunge: true }; };
+  expect('lunge, parry their riposte from the lunge, counter-riposte (most repetitions)', 'second-intention', second, true, 'second intention', 3, 2);
+  expect('a lunge held there, not parrying the riposte, fails', 'second-intention', (me, them, c, st) => (st.t < 0.5 ? {} : { ...steer(me, chest(them), st, 1), lunge: me.extension > 0.6 }), false, undefined, 2);
   // and the pace: slow to start, faster with each good one, passed with three at full speed
   {
     const b = new Bout({ weapon: EPEE, to: 5, referee: false }), run = new LessonRunner(b, LESSONS.find((l) => l.id === 'extension'), 3);

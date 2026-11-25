@@ -25,7 +25,7 @@ export const GAIN = {
   hand: [0.13, 0.08], point: [0.3, 0.34],
   /** (hand scheme) the hand across (m) and up (m); the point up (rad); how much the wrist holds the point on them
    * as the hand moves (1: fully, about `aimDist` away); and a little of the point's own aim across (rad) */
-  across: 0.3, rise: 0.05, tilt: 0.36, hold: 0.6, aimDist: 1.6, nudge: 0.08,
+  across: 0.3, rise: 0.05, tilt: 0.55, hold: 0.6, aimDist: 1.6, nudge: 0.08,
   /** left thumb: travel (of `reach`) to full extension, and further to lunge; down to retreat */
   extendAt: 0.9, lungeAt: 1.45, retreatAt: 0.45,
   /** a tap: shorter than this (s) and moving less than this (px) */
