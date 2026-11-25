@@ -47,6 +47,8 @@ export interface ContactStats {
   at: V;
   /** the blades are touching (a bind, a press, a slide) */
   touching: boolean;
+  /** where they met (at the last new contact), as a fraction of each blade from its guard: 0 forte .. 1 tip */
+  where: [number, number];
 }
 
 /** A pair of blades, with the sides each pair of segments was on when they were last close. */
@@ -83,6 +85,7 @@ export class BladePair {
       this.side.set(key, [nx, ny, nz]);
       if (pen <= 0) continue;
       if (!this.touching) {
+        if (!touching) stats.where = [(i - 1 + s) / (a.n - 2), (j - 1 + t) / (b.n - 2)];
         // (how fast they were coming together, this substep, before the contact took it out)
         let ap = 0;
         for (let k = 0; k < 3; k++) {
@@ -91,7 +94,7 @@ export class BladePair {
           ap -= (da - db) * (k === 0 ? nx : k === 1 ? ny : nz);
         }
         const speed = ap / H_OF(a);
-        if (speed > stats.clash) { stats.clash = speed; stats.at = [a.x[i * 3] + (a.x[i * 3 + 3] - a.x[i * 3]) * s, a.x[i * 3 + 1] + (a.x[i * 3 + 4] - a.x[i * 3 + 1]) * s, a.x[i * 3 + 2] + (a.x[i * 3 + 5] - a.x[i * 3 + 2]) * s]; }
+        if (speed > stats.clash) { stats.clash = speed; stats.where = [(i - 1 + s) / (a.n - 2), (j - 1 + t) / (b.n - 2)]; stats.at = [a.x[i * 3] + (a.x[i * 3 + 3] - a.x[i * 3]) * s, a.x[i * 3 + 1] + (a.x[i * 3 + 4] - a.x[i * 3 + 1]) * s, a.x[i * 3 + 2] + (a.x[i * 3 + 5] - a.x[i * 3 + 2]) * s]; }
       }
       touching = true;
       const wa0 = a.w[i] * (1 - s), wa1 = a.w[i + 1] * s, wb0 = b.w[j] * (1 - t), wb1 = b.w[j + 1] * t;

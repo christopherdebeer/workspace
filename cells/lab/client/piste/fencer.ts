@@ -175,7 +175,7 @@ export class Fencer {
   follow(h: number) {
     const I = this.intent, k = 1 - Math.exp(-h * 40);
     this.ext += (clamp(I.extend, 0, 1) - this.ext) * (1 - Math.exp(-h * 18));
-    this.hx += (clamp(I.hand[0], -0.22, 0.22) - this.hx) * k;
+    this.hx += (clamp(I.hand[0], -0.3, 0.3) - this.hx) * k;
     this.hy += (clamp(I.hand[1], -0.2, 0.2) - this.hy) * k;
     this.px += (clamp(I.point[0], -0.7, 0.7) - this.px) * k;
     this.py += (clamp(I.point[1], -0.7, 0.7) - this.py) * k;
@@ -201,6 +201,19 @@ export class Fencer {
  * the middle, extended straight along the arm */
 export const lineOf = (F: Frame, e: number): V => norm(dirWorld(F, 1, 0.16 - 0.15 * e, -0.1 + 0.08 * e));
 
+/**
+ * The intent that points `f`'s weapon at world point `p` at extension `e`: the wrist turns the blade off its natural
+ * line toward it, and the hand shifts a little toward it too. (The inverse of `handTarget`, near enough.)
+ */
+export function aimAt(f: Fencer, p: V, e: number): { hand: [number, number]; point: [number, number] } {
+  const F = f.frame, O = { ...F, o: [0, 0, 0] as V };
+  const want = toLocalDir(O, norm(sub(p, f.blade.guard))), base = toLocalDir(O, lineOf(F, e));
+  const yaw = Math.atan2(want[2], want[0]) - Math.atan2(base[2], base[0]);
+  const pitch = Math.atan2(want[1], Math.hypot(want[0], want[2])) - Math.atan2(base[1], Math.hypot(base[0], base[2]));
+  return { point: [clamp(yaw, -0.6, 0.6), clamp(pitch, -0.6, 0.6)], hand: [clamp(yaw * 0.15, -0.08, 0.08), clamp(pitch * 0.2, -0.08, 0.08)] };
+}
+const toLocalDir = (F: Frame, d: V): V => [dot(d, F.f), dot(d, F.u), dot(d, F.r)];
+
 /** two-bone IK: the joint between `a` and `c`, bones `l1` and `l2`, bent toward `pole` */
 export function knee(a: V, c: V, l1: number, l2: number, pole: V): V {
   const d = sub(c, a), L = clamp(len(d), 1e-4, l1 + l2 - 1e-4), dn = norm(d);
@@ -208,4 +221,3 @@ export function knee(a: V, c: V, l1: number, l2: number, pole: V): V {
   const pp = sub(pole, scale(dn, dot(pole, dn))), pn = len(pp) > 1e-6 ? norm(pp) : norm(cross(dn, [0, 0, 1]));
   return add(add(a, scale(dn, x)), scale(pn, y));
 }
-export { dist, lerp };

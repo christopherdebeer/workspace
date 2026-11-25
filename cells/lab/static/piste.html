@@ -34,16 +34,65 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 #markRdot,#markLdot{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border-radius:50%;background:#ffffff60;will-change:transform}
 #markL{position:absolute;width:3px;margin-left:-1.5px;background:linear-gradient(#ff3b3088 0 var(--ext),#ffffff55 var(--ext) calc(100% - var(--ret)),#ffffff22 calc(100% - var(--ret)))}
 #hint{position:fixed;left:0;right:0;bottom:calc(max(12px,env(safe-area-inset-bottom)) + 48px);text-align:center;font-size:10px;letter-spacing:.2em;line-height:2;text-transform:uppercase;opacity:.6;pointer-events:none;transition:opacity 1s}
+/* bullet time: the edges close in as time slows */
+#slow{position:fixed;inset:0;pointer-events:none;opacity:calc(var(--slow,0) * .9);background:radial-gradient(ellipse 70% 62% at 50% 45%,#0000 45%,#0a1420cc 100%);transition:opacity .08s}
+#rate{position:fixed;right:max(14px,env(safe-area-inset-right));top:calc(max(12px,env(safe-area-inset-top)) + 4px);font:12px ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#9cf;pointer-events:none}
+/* cards: the menu, a lesson's brief, its verdict, passing it */
+.card{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(380px,calc(100% - 32px));max-height:calc(100% - 40px);overflow:auto;padding:22px 20px 18px;background:#14161be8;border:1px solid #ffffff26;border-radius:10px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:0 12px 40px #000a}
+.card h1,.card h2{margin:0 0 4px;font-weight:300;letter-spacing:.2em;text-transform:uppercase}
+.card h1{font-size:28px}.card h2{font-size:17px;letter-spacing:.14em}
+.card h3{margin:18px 0 8px;font-size:10px;letter-spacing:.3em;text-transform:uppercase;opacity:.6;font-weight:400}
+.card p{margin:10px 0 0;font-size:14px;line-height:1.55;opacity:.9}
+.card .lede{font-size:12px;opacity:.65;margin-top:6px}
+.list a{display:flex;align-items:baseline;gap:10px;padding:11px 12px;margin:0 0 6px;border:1px solid #ffffff1f;border-radius:8px;color:var(--ink);text-decoration:none;font-size:14px;min-height:44px}
+.list a b{font-weight:400;opacity:.5;font-variant-numeric:tabular-nums;min-width:1.1em}
+.list a em{margin-left:auto;font-style:normal;color:var(--you)}
+#mLevels a{flex-direction:column;gap:2px}#mLevels a b{opacity:1;text-transform:capitalize}#mLevels a span{font-size:11px;opacity:.55}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.acts button,.acts a{font:inherit;font-size:11px;letter-spacing:.2em;text-transform:uppercase;text-decoration:none;color:var(--ink);background:#ffffff10;border:1px solid #ffffff40;border-radius:999px;padding:0 16px;min-height:42px;display:inline-flex;align-items:center;cursor:pointer}
+.acts .go{background:var(--ink);color:#14161b;border-color:var(--ink)}
+/* a lesson, under way */
+#lesson{position:fixed;left:0;right:0;top:calc(max(12px,env(safe-area-inset-top)) + 34px);text-align:center;pointer-events:none;display:none}
+.lesson #lesson{display:block}
+#lTitle{font-size:10px;letter-spacing:.3em;text-transform:uppercase;opacity:.6}
+#lPrompt{margin-top:6px;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
+#lMeta{margin-top:8px;display:flex;justify-content:center;align-items:center;gap:12px;font-size:10px;letter-spacing:.2em;text-transform:uppercase;opacity:.75}
+#lDots{display:flex;gap:5px}#lDots i{display:block;width:9px;height:9px;border-radius:50%;border:1px solid var(--ink)}#lDots i.on{background:var(--you);border-color:var(--you)}
+#verdict{top:auto;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%)}
+#vSay{font-size:22px;letter-spacing:.16em;text-transform:uppercase;font-weight:300}
+#vSay.ok{color:var(--you)}#vSay.no{color:#ff8a80}
+#vDetail{font-size:13px;line-height:1.5;margin-top:6px;opacity:.9}
+.lesson #score,.lesson #labels,.lesson #hint,.menu #top,.menu #labels,.menu #hint,.menu #bar,.menu #marks{display:none}
+/* a replay */
+#replay{position:fixed;left:0;right:0;bottom:0;padding:14px 18px max(18px,env(safe-area-inset-bottom));background:linear-gradient(#0000,#000c 40%);display:none;cursor:pointer}
+.replaying #replay{display:block}
+.replaying #mask,.replaying #slow,.replaying #rate,.replaying #marks,.replaying #hint,.replaying #verdict,.replaying #bar{display:none!important}
+#replayRate{font:11px ui-monospace,Menlo,monospace;letter-spacing:.2em;color:#9cf;text-transform:uppercase}
+#replayNotes{margin:8px 0 0;font:13px/1.6 "Helvetica Neue",Helvetica,Arial,sans-serif;white-space:pre-line}
+#replay small{display:block;margin-top:8px;font-size:9px;letter-spacing:.24em;text-transform:uppercase;opacity:.5}
+.preview #slow,.preview #rate,.preview #lesson,.preview .card,.preview #replay{display:none!important}
 [hidden]{display:none!important}
+
+body:not(.menu) #menu{display:none}
 .preview #top,.preview #labels,.preview #mid,.preview #bar,.preview #marks,.preview #hint,.preview #readout{display:none}
 </style></head><body>
 <canvas id="view" aria-label="Looking out through a fencing mask down a piste at an opponent en garde, their épée pointed at you; your own guard and blade low in the view."></canvas>
 <div id="mask"></div>
+<div id="slow"></div><div id="rate"></div>
 <div id="marks"><div id="markR" hidden></div><div id="markRdot" hidden></div><div id="markL" hidden></div><div id="markLdot" hidden></div></div>
 <div id="top"><i id="lampThem"></i><div id="score">0 · 0</div><i id="lampYou"></i></div>
 <div id="labels"><span>them</span><span>you</span></div>
 <div id="mid" role="status"><div id="say"></div><div id="sub"></div></div>
-<div id="hint">left thumb: up to extend, further to lunge · tap to advance · down to retreat<br>right thumb: the point</div>
+<div id="hint">left thumb: up to extend, further to lunge · tap to advance · down to retreat<br>right thumb: across to parry · up and down for the point</div>
+<div id="lesson"><div id="lTitle"></div><div id="lPrompt"></div><div id="lMeta"><span id="lDots"></span><span id="lPace"></span></div></div>
+<div id="brief" class="card" hidden><h2 id="bTitle"></h2><div id="bText"></div><div class="acts"><button id="bGo" class="go">begin</button><a href="?">lessons</a></div></div>
+<div id="verdict" class="card" hidden><div id="vSay"></div><div id="vDetail"></div><div class="acts"><button id="vNext" class="go">next</button><button id="vAgain">see it again</button></div></div>
+<div id="passed" class="card" hidden><h2>passed</h2><p>Three good repetitions at full speed.</p><div class="acts"><a id="pNext" class="go" href="?">next lesson</a><a id="pAgain" href="?">again</a><a href="?">lessons</a></div></div>
+<div id="menu" class="card"><h1>Piste</h1><div class="lede">a fencing bout through your own mask · épée</div>
+<h3>Learn</h3><div id="mLessons" class="list"></div>
+<h3>Fence</h3><div id="mLevels" class="list"></div>
+<div class="acts"><a href="?auto">watch</a><a href="{{readme}}">notes</a></div></div>
+<div id="replay"><div id="replayRate"></div><div id="replayNotes"></div><small>tap to go on</small></div>
 <pre id="readout"></pre>
-<div id="bar"><a href="?readout&view=side">side</a><a href="{{readme}}">notes</a></div>
+<div id="bar"><a href="?">menu</a><a href="{{readme}}">notes</a></div>
 <script type="module" src="{{app}}"></script></body></html>

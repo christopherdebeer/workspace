@@ -1,5 +1,40 @@
 [
  {
+  "group": "Learning",
+  "views": [
+   {
+    "name": "menu",
+    "title": "Learn, or fence",
+    "caption": "seven lessons in the order a beginner learns them; four opponents, each allowing less bullet time",
+    "file": "v-menu.jpg"
+   },
+   {
+    "name": "brief",
+    "title": "A lesson’s brief",
+    "caption": "what the master says before the first repetition",
+    "file": "v-brief.jpg"
+   },
+   {
+    "name": "lesson",
+    "title": "A lesson under way",
+    "caption": "the coach about to attack on your inside line; the count of good repetitions at full speed, and the pace",
+    "file": "v-lesson.jpg"
+   },
+   {
+    "name": "verdict",
+    "title": "The verdict",
+    "caption": "the judge reads the bout: here, no parry at all, and what to do instead",
+    "file": "v-verdict.jpg"
+   },
+   {
+    "name": "replay",
+    "title": "The touch again",
+    "caption": "after each touch, the last second again, slowing into the hit, from the side, with what happened written as it happens",
+    "file": "v-replay.jpg"
+   }
+  ]
+ },
+ {
   "group": "The bout",
   "views": [
    {

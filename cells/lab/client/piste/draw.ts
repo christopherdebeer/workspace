@@ -121,6 +121,8 @@ export interface View {
   fov: number;
   /** which fencer's own head (and chest) not to draw (the one we're looking out of), or -1 */
   self: number;
+  /** marks in the world (a replay's touches and contacts): where, colour, size */
+  marks?: { p: V; c: [number, number, number]; r: number }[];
 }
 
 export class Renderer {
@@ -160,6 +162,7 @@ export class Renderer {
     m.reset();
     this.hall(m);
     bout.fencers.forEach((f, i) => this.fencer(m, f, i === view.self));
+    for (const k of view.marks ?? []) m.sphere(k.p, k.r, [k.c[0], k.c[1], k.c[2], 0], 10, 7);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(this.fog[0], this.fog[1], this.fog[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);

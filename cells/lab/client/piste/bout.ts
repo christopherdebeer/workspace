@@ -7,7 +7,7 @@
  *
  * Fencer 0 is "you" only to the code that draws and listens; to the bout they're the same.
  */
-import { Fencer } from './fencer';
+import { Fencer, BODY } from './fencer';
 import { Box, award, type Light } from './box';
 import { BladePair, bodyContact, floorContact, guardContact, type ContactStats, type TipContact } from './contact';
 import type { Weapon } from './weapons';
@@ -19,14 +19,20 @@ export const PISTE = { half: 7, garde: 2, width: 1.5 };
 
 export type Phase = 'ready' | 'fence' | 'halt' | 'over';
 export type BoutEvent =
-  | { type: 'clash'; t: number; at: V; strength: number }
+  | { type: 'clash'; t: number; at: V; strength: number; where: [number, number] }
+  | { type: 'reset'; t: number }
   | { type: 'guard'; t: number; who: 0 | 1; strength: number }
   | { type: 'light'; t: number; who: 0 | 1; light: Light }
   | { type: 'halt'; t: number; call: string; points: [number, number] }
   | { type: 'allez'; t: number }
   | { type: 'over'; t: number; winner: 0 | 1 };
 
-export interface Options { weapon: Weapon; to: number }
+export interface Options {
+  weapon: Weapon; to: number;
+  /** a referee (allez, halt, the score, en garde). Without one (a lesson), whoever runs the bout places the fencers and
+   * reads the box, and the bout is always fencing. */
+  referee?: boolean;
+}
 
 export class Bout {
   readonly fencers: [Fencer, Fencer];
@@ -41,31 +47,43 @@ export class Bout {
   events: BoutEvent[] = [];
   /** this substep's contacts, for the readout */
   readonly tips: [TipContact, TipContact] = [{ part: null, axial: 0, force: 0 }, { part: null, axial: 0, force: 0 }];
-  readonly clash: ContactStats = { clash: 0, at: [0, 0, 0], touching: false };
-  /** the hardest each tip pressed since the last drain, N (a press too brief or too light to register still shows) */
+  readonly clash: ContactStats = { clash: 0, at: [0, 0, 0], touching: false, where: [0, 0] };
+  /** substeps run since the bout began (a replay is keyed to these) */
+  n = 0;
+  /** when the blades were last touching, s */
+  lastTouch = -9;
+  /** the hardest each tip pressed since the fencers were placed or `resetPeak`, N (a press too brief or too light to
+   * register still shows) */
   peak: [number, number] = [0, 0];
   private acc = 0;
+  /** when each bell was last touched by the other blade */
+  private bellAt: [number, number] = [-9, -9];
   private lastClash = -1;
 
   constructor(readonly opts: Options) {
     this.fencers = [new Fencer(opts.weapon, -PISTE.garde, 1), new Fencer(opts.weapon, PISTE.garde, -1)];
     this.box = new Box(opts.weapon);
     this.pair = new BladePair(this.fencers[0].blade, this.fencers[1].blade);
+    if (opts.referee === false) this.phase = 'fence';
   }
 
   /** run on by dt (real seconds); returns how many substeps ran */
   advance(dt: number): number {
     this.acc += Math.min(dt, 0.05);
     let n = 0;
-    while (this.acc >= H) { this.substep(); this.acc -= H; n++; }
+    while (this.acc >= H) { this.stepOnce(); this.acc -= H; n++; }
     return n;
   }
 
-  drain(): BoutEvent[] { const e = this.events; this.events = []; this.peak = [0, 0]; return e; }
+  drain(): BoutEvent[] { const e = this.events; this.events = []; return e; }
+  /** forget the tips' peak force (whoever reads it) */
+  resetPeak() { this.peak = [0, 0]; }
 
-  private substep() {
+  /** one substep (a replay steps these one at a time) */
+  stepOnce() {
     const h = H, [A, B] = this.fencers;
     this.t += h;
+    this.n++;
     this.referee();
     const moving = this.phase === 'fence' || this.phase === 'halt';
     for (const f of this.fencers) {
@@ -95,16 +113,21 @@ export class Bout {
         if (now && !had) this.events.push({ type: 'light', t: this.t, who: i, light: now });
       }
     }
+    if (this.clash.touching) this.lastTouch = this.t;
     if (this.clash.clash > 0.3 && this.t - this.lastClash > 0.03) {
       this.lastClash = this.t;
-      this.events.push({ type: 'clash', t: this.t, at: this.clash.at, strength: this.clash.clash });
+      this.events.push({ type: 'clash', t: this.t, at: this.clash.at, strength: this.clash.clash, where: [...this.clash.where] as [number, number] });
     }
-    if (g0 > 2e-4) this.events.push({ type: 'guard', t: this.t, who: 0, strength: g0 });
-    if (g1 > 2e-4) this.events.push({ type: 'guard', t: this.t, who: 1, strength: g1 });
+    // (a blade meeting a bell: once as it begins)
+    for (const [who, g] of [[0, g0], [1, g1]] as const) {
+      if (g > 0 && this.t - this.bellAt[who] > 0.03) this.events.push({ type: 'guard', t: this.t, who, strength: g });
+      if (g > 0) this.bellAt[who] = this.t;
+    }
   }
 
   /** the referee: en garde, allez, halt, the point, and the end */
   private referee() {
+    if (this.opts.referee === false) return;
     const since = this.t - this.phaseAt;
     if (this.phase === 'ready' && since > 0.9) this.go('fence', () => this.events.push({ type: 'allez', t: this.t }));
     if (this.phase === 'fence') {
@@ -141,7 +164,20 @@ export class Bout {
     this.fencers[1].reset(PISTE.garde);
     this.box.reset();
     this.call = '';
+    this.peak = [0, 0];
     this.go('ready');
+    this.events.push({ type: 'reset', t: this.t });
+  }
+
+  /** (no referee) put the fencers en garde with their fronts `gap` apart, about the middle, the box cleared */
+  place(gap: number, mid = 0) {
+    const [A, B] = this.fencers, half = BODY.stance / 2;
+    A.reset(mid - gap / 2 - half); B.reset(mid + gap / 2 + half);
+    this.box.reset();
+    this.call = '';
+    this.peak = [0, 0];
+    this.phase = 'fence'; this.phaseAt = this.t;
+    this.events.push({ type: 'reset', t: this.t });
   }
   restart() { this.score = [0, 0]; this.enGarde(); }
 

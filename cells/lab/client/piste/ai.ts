@@ -10,9 +10,9 @@
 import type { Bout } from './bout';
 import type { Controller, Intent } from './intent';
 import { idle } from './intent';
-import { type Fencer, lineOf } from './fencer';
+import { type Fencer, aimAt } from './fencer';
 import { seeded, type Rand } from '../kit/rng';
-import { type V, add, clamp, dot, madd, norm, sub, toLocal } from './v3';
+import { type V, add, dot, madd, norm, sub, toLocal } from './v3';
 
 /** what it saw: the other's tip and how it moved, where they stood */
 interface Seen { t: number; tip: V; tipVel: V; s: number; lunge: number; ext: number; gap: number }
@@ -26,6 +26,15 @@ export interface Style {
   aggression: number; parry: number;
 }
 export const SPARRING: Style = { reaction: 0.2, measure: 1.75, aggression: 0.5, parry: 0.75 };
+
+/** The levels of opponent, and how much bullet time each allows you (the assist falls away as they get better). */
+export interface Level { name: string; style: Style; assist: number }
+export const LEVELS: Level[] = [
+  { name: 'novice', style: { reaction: 0.32, measure: 1.95, aggression: 0.22, parry: 0.35 }, assist: 1 },
+  { name: 'club', style: { reaction: 0.25, measure: 1.85, aggression: 0.38, parry: 0.6 }, assist: 0.6 },
+  { name: 'competitor', style: SPARRING, assist: 0.25 },
+  { name: 'master', style: { reaction: 0.16, measure: 1.7, aggression: 0.68, parry: 0.88 }, assist: 0 },
+];
 
 type Tactic = 'measure' | 'attack' | 'recover' | 'parry' | 'riposte';
 
@@ -124,19 +133,10 @@ export class Opponent implements Controller {
     return add(c.b, [0, -0.08, 0]);
   }
 
-  /**
-   * Point the weapon at `p`: the wrist turns the blade from its natural line (as fencer.ts lays it at this extension)
-   * toward the target, and the hand shifts a little toward it too.
-   */
+  /** point the weapon at `p` (the wrist, and the hand a little) */
   private inLine(I: Intent, p: V, e = I.extend) {
-    const me = this.self, F = me.frame;
-    const want = norm(sub(p, me.blade.guard));
-    const base = lineOf(F, e);
-    const lw = toLocal({ ...F, o: [0, 0, 0] }, want), lb = toLocal({ ...F, o: [0, 0, 0] }, base);
-    const yaw = Math.atan2(lw[2], lw[0]) - Math.atan2(lb[2], lb[0]);
-    const pitch = Math.atan2(lw[1], Math.hypot(lw[0], lw[2])) - Math.atan2(lb[1], Math.hypot(lb[0], lb[2]));
-    I.point = [clamp(yaw, -0.6, 0.6), clamp(pitch, -0.6, 0.6)];
-    I.hand = [clamp(yaw * 0.15, -0.08, 0.08), clamp(pitch * 0.2, -0.08, 0.08)];
+    const a = aimAt(this.self, p, e);
+    I.point = a.point; I.hand = a.hand;
   }
 }
 

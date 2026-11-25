@@ -1,9 +1,12 @@
 /**
  * Two thumbs on the glass, read as an Intent (and a keyboard and mouse, for the desk).
  *
- *   right thumb: the weapon hand. Where it goes from where it landed is where the point goes: the hand shifts a
- *                little that way and the wrist turns the point a lot (so a small move is a fine one). Let go and the
- *                hand comes back to its guard. A second finger on the right rolls the hand (its sideways drag).
+ *   right thumb: the weapon hand. Two schemes (`thumb=`):
+ *                hand (the default): sideways moves the hand across your body (a parry: quarte to the left, sixte to
+ *                the right) while the wrist keeps the point toward them; up and down tilts the point (the high and the
+ *                low lines). So a parry is one movement, and the point is still there for the riposte.
+ *                point: where the thumb goes is where the point goes (the hand a little, the wrist a lot).
+ *                Either way, let go and the hand comes back to its guard. A second finger rolls the hand.
  *   left thumb:  the body. Push up and the arm extends, as far as you push; push on past that and you lunge, and
  *                hold it there; let go to recover. A tap is an advance; pull down for a retreat (keep it down to keep
  *                retreating).
@@ -18,8 +21,11 @@ import { clamp } from './v3';
 export const GAIN = {
   /** a thumb's full travel, as a fraction of the screen's short side */
   reach: 0.17,
-  /** what full travel does: the guard (m) and the wrist (rad), right/left and up/down */
+  /** (point scheme) what full travel does: the guard (m) and the wrist (rad), right/left and up/down */
   hand: [0.13, 0.08], point: [0.3, 0.34],
+  /** (hand scheme) the hand across (m) and up (m); the point up (rad); how much the wrist holds the point on them
+   * as the hand moves (1: fully, about `aimDist` away); and a little of the point's own aim across (rad) */
+  across: 0.3, rise: 0.05, tilt: 0.36, hold: 0.6, aimDist: 1.6, nudge: 0.08,
   /** left thumb: travel (of `reach`) to full extension, and further to lunge; down to retreat */
   extendAt: 0.9, lungeAt: 1.45, retreatAt: 0.45,
   /** a tap: shorter than this (s) and moving less than this (px) */
@@ -40,6 +46,11 @@ export class Thumbs {
   // the keyboard and mouse
   private keys = new Set<string>();
   private mouse: Thumb | null = null;
+
+  /** which scheme the right thumb uses */
+  scheme: 'hand' | 'point' = 'hand';
+  /** which controls a lesson allows (all, in a bout) */
+  allow = { feet: true, extend: true, lunge: true, hand: true };
 
   constructor(private el: HTMLElement) {
     el.addEventListener('pointerdown', this.down);
@@ -100,8 +111,14 @@ export class Thumbs {
     // the hand
     const hand = this.right ?? this.mouse;
     const [ax, ay] = hand ? this.travel(hand) : [0, 0];
-    I.hand = [ax * GAIN.hand[0], ay * GAIN.hand[1]];
-    I.point = [ax * GAIN.point[0], ay * GAIN.point[1]];
+    if (this.scheme === 'point') {
+      I.hand = [ax * GAIN.hand[0], ay * GAIN.hand[1]];
+      I.point = [ax * GAIN.point[0], ay * GAIN.point[1]];
+    } else {
+      const hx = ax * GAIN.across;
+      I.hand = [hx, ay * GAIN.rise];
+      I.point = [-Math.atan(hx / GAIN.aimDist) * GAIN.hold + ax * GAIN.nudge, ay * GAIN.tilt];
+    }
     I.roll = this.twist ? clamp((this.twist.x - this.twist.x0) / this.unit, -1, 1) * GAIN.roll : 0;
     // the body
     let up = 0;
@@ -111,6 +128,11 @@ export class Thumbs {
     I.extend = clamp(up / GAIN.extendAt, 0, 1);
     I.lunge = up >= GAIN.lungeAt;
     if (this.left && up < -GAIN.retreatAt && t - this.lastRetreat > GAIN.repeat) { I.step = 'retreat'; this.lastRetreat = t; }
+    const A = this.allow;
+    if (!A.feet) I.step = null;
+    if (!A.lunge) I.lunge = false;
+    if (!A.extend) I.extend = 0;
+    if (!A.hand) { I.hand = [0, 0]; I.point = [0, 0]; I.roll = 0; }
     return I;
   }
 
