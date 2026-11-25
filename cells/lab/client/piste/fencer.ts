@@ -144,9 +144,10 @@ export class Fencer {
     const P = this.blade ? this.blade.pommel : this.shoulder, G = this.blade ? this.blade.guard : this.shoulder;
     this.hand = this.blade ? madd(G, norm(sub(P, G)), BODY.gripToGuard) : this.shoulder;
     this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.4), [0, -1, 0]));
-    // the rear arm, up and behind (balance)
-    const rearElbow = toWorld(F, hipsFwd - 0.3 + 0.1 * L, hipsUp + 0.56 - 0.3 * L, -0.08);
-    const rearHand = toWorld(F, hipsFwd - 0.32 - 0.25 * L, hipsUp + 0.86 - 0.65 * L, -0.06);
+    // the rear arm, relaxed, low and a little back (the modern épée carriage: no raised arm); in a lunge it swings back
+    // and straightens, for balance
+    const rearElbow = toWorld(F, hipsFwd - 0.12 - 0.12 * L, hipsUp + 0.26 - 0.06 * L, -0.2);
+    const rearHand = toWorld(F, hipsFwd - 0.04 - 0.4 * L, hipsUp + 0.03 + 0.02 * L, -0.24);
     this.capsules = [
       { a: pelvis, b: chest, ra: 0.13, rb: 0.15, part: 'torso' },
       { a: chest, b: neck, ra: 0.14, rb: 0.07, part: 'torso' },
