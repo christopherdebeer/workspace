@@ -21,7 +21,7 @@ export const ROOM = {
 export const PAINT = {
   floor: [0.11, 0.125, 0.108] as C, piste: [0.28, 0.29, 0.285] as C, line: [0.78, 0.77, 0.74] as C,
   chalk: [0.27, 0.315, 0.29] as C, chalkFront: [0.30, 0.335, 0.31] as C, windowWall: [0.62, 0.6, 0.54] as C,
-  dadoL: [0.28, 0.36, 0.33] as C, rightWall: [0.17, 0.21, 0.29] as C, dadoR: [0.11, 0.13, 0.17] as C,
+  dadoL: [0.28, 0.36, 0.33] as C, rightWall: [0.31, 0.335, 0.30] as C, dadoR: [0.118, 0.156, 0.133] as C,
   ceiling: [0.55, 0.55, 0.53] as C, frame: [0.5, 0.5, 0.47] as C, wood: [0.36, 0.18, 0.07] as C, radiator: [0.7, 0.7, 0.67] as C,
   jacket: [0.72, 0.71, 0.68] as C, maskMesh: [0.05, 0.05, 0.055] as C, bib: [0.7, 0.7, 0.67] as C, steel: [0.4, 0.4, 0.42] as C,
 };
@@ -105,8 +105,27 @@ function hungMask(m: Mesh, c: V) {
   m.box([c[0] - 0.09, c[1] - 0.26, c[2] - 0.02], [c[0] + 0.09, c[1] - 0.12, c[2] + 0.06], P.bib, MAT.cloth);
 }
 function hungJacket(m: Mesh, top: V, k: number) {
-  const P = PAINT, [x, y, z] = top, wob = (k % 3) * 0.02;
-  // a jacket hung by its collar: shoulders, a body, a sleeve hanging
-  m.quad([x - 0.2, y - 0.05, z], [x + 0.2, y - 0.05, z], [x + 0.21 + wob, y - 0.7, z - 0.03], [x - 0.19, y - 0.7, z - 0.03], P.jacket, MAT.cloth);
-  m.quad([x - 0.2, y - 0.05, z - 0.005], [x - 0.13, y - 0.05, z - 0.01], [x - 0.12, y - 0.62, z - 0.05], [x - 0.22, y - 0.6, z - 0.04], [P.jacket[0] * 0.85, P.jacket[1] * 0.85, P.jacket[2] * 0.85], MAT.cloth);
+  const [x,y,z] = top;
+  // The fabric hangs forward over the hook, compressed at the collar and uneven at the hem.
+  const section = (cx: number, cy: number, cz: number, ru: number, rw: number) => ({
+    c: [cx,cy,cz] as V, u: [1,0,0] as V, w: [0,0,1] as V, ru, rw,
+  });
+  const twist = Math.sin(k) * 0.023;
+  const body = [
+    section(x,y,z-0.05,0.058,0.035),
+    section(x,y-0.075,z-0.06,0.17,0.055),
+    section(x+twist,y-0.18,z-0.05,0.15,0.049),
+    section(x+twist,y-0.49,z-0.06,0.14,0.044),
+    section(x+2*twist,y-0.61,z-0.055,0.149,0.044),
+  ];
+  m.tube(body,16,PAINT.jacket,MAT.cloth,{capB:true,soft:0.85,jit:0.035,seed:k});
+  for (const side of [-1,1]) {
+    const sleeve = [
+      section(x+side*0.127,y-0.081,z-0.066,0.041,0.043),
+      section(x+side*0.159,y-0.21,z-0.077,0.046,0.043),
+      section(x+side*0.168+twist,y-0.36,z-0.084,0.037,0.035),
+      section(x+side*0.15+twist,y-0.51,z-0.095,0.030,0.029),
+    ];
+    m.tube(sleeve,12,PAINT.jacket,MAT.cloth,{capB:true,soft:0.9});
+  }
 }

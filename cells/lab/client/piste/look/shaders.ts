@@ -101,16 +101,17 @@ float shadowAt(){
 float contact(vec3 p){
   float k = 1.0;
   for (int i = 0; i < 4; i++) { vec2 d = p.xz - feet[i].xz; float r = feet[i].w; k *= 1.0 - 0.55 * exp(-dot(d, d) / (r * r)); }
-  for (int i = 0; i < 2; i++) { float hgt = max(0.0, tips[i].y); float r = 0.03 + hgt * 0.035; vec2 d = p.xz - tips[i].xz;
-    k *= 1.0 - tips[i].w * (0.62 / (1.0 + hgt * 0.5)) * exp(-dot(d, d) / (r * r)); }
+  for (int i = 0; i < 2; i++) { float hgt = max(0.0, tips[i].y); float r = 0.018 + hgt * 0.072; vec2 d = p.xz - (tips[i].xz - sunDir.xz * hgt / max(0.2,sunDir.y));
+    k *= 1.0 - tips[i].w * (0.60 / (1.0 + 4.5*hgt*hgt)) * exp(-dot(d, d) / (r * r)); }
   // the blades' own thin shadows, straight down (the lamps overhead): a line on the floor from under the guard to under
   // the tip, finer and darker where the steel is nearer the floor, ending at the tip's mark
   for (int i = 0; i < 2; i++) {
-    vec2 a = bladeA[i].xz, b = bladeB[i].xz, ab = b - a;
+    vec2 offset = sunDir.xz / max(0.2,sunDir.y);
+    vec2 a = bladeA[i].xz-offset*bladeA[i].y, b = bladeB[i].xz-offset*bladeB[i].y, ab = b-a;
     float t = clamp(dot(p.xz - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
     float hgt = max(0.0, mix(bladeA[i].y, bladeB[i].y, t)), w = 0.006 + hgt * 0.006;
     float dd = length(p.xz - (a + ab * t));
-    k *= 1.0 - (0.55 / (1.0 + hgt * 0.45)) * smoothstep(0.0, 0.25, t) * exp(-dd * dd / (w * w));
+    k *= 1.0 - (0.46 / (1.0 + 3.0*hgt*hgt)) * smoothstep(0.0, 0.25, t) * exp(-dd * dd / (w * w));
   }
   return k;
 }
@@ -182,7 +183,7 @@ void main(){
     alb *= 1.0 + 0.07 * weave * seen;
     // the seam: a narrow darker line, stitched
     float sl = (1.0 - smoothstep(0.0018, 0.0045, seamD)), st = step(0.5, fract(vT.y * 110.0));
-    alb *= 1.0 - sl * (0.22 + 0.12 * st);
+    alb *= 1.0 - sl * (0.10 + 0.055 * st);
     // folds and contact: darker and cooler where it's shut in
     alb *= shade; alb = mix(alb * vec3(0.86, 0.9, 1.04), alb, shade);
     if (vAtlas.x >= 0.5) {
@@ -297,3 +298,4 @@ void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
   gl_Position = lvp * vec4((M * vec4(p, 1.0)).xyz + hem * ex.x, 1.0);
 }`;
+
