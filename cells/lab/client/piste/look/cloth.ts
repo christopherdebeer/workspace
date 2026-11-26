@@ -103,7 +103,7 @@ void main(){
  * out straight, with no small arrays indexed in a loop: on phone GPUs those spill out of registers and cost several
  * times the whole pass (the first version ran at an eighth of this speed on an iPhone) */
 const SOLVE_FS = HEAD + `
-uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1, Seam; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
+uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1, Seam, SeamB; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
 /** the arms (upper and fore, each side: a, b, radius), for the jacket's body to lie against */
 uniform vec4 armA[4], armB[4];
 out vec4 o;
@@ -131,9 +131,20 @@ void main(){
   rel(1, 1, q1.x, kShear); rel(1, -1, q1.y, kShear); rel(-1, 1, q1.z, kShear); rel(-1, -1, q1.w, kShear);
   rel(2, 0, q2.x, kBend); rel(-2, 0, q2.y, kBend); rel(0, 2, q2.z, kBend); rel(0, -2, q2.w, kBend);
   x += omega * acc / max(n, 1.0);
-  // sewn: a point on a seam drawn to the point it's sewn to on the other piece (each draws the other, half way)
-  float sp = texelFetch(Seam, tc(i), 0).x;
-  if (sp >= 0.0) x += 0.5 * (texelFetch(X, tc(int(sp)), 0).xyz - x);
+  // sewn: a point on a seam drawn half way to where it's sewn on the other piece's edge (between two of its points);
+  // and the points it's sewn to drawn toward the points sewn to them, by how much of each they hold
+  vec4 sw = texelFetch(Seam, tc(i), 0);
+  if (sw.x >= 0.0) x += 0.5 * (mix(texelFetch(X, tc(int(sw.x)), 0).xyz, texelFetch(X, tc(int(sw.y)), 0).xyz, sw.z) - x);
+  // (each follower packed in one channel: its texel, and its share as the fraction)
+  vec4 b = texelFetch(SeamB, tc(i), 0);
+  if (b.x >= 0.0) {
+    vec3 d = vec3(0.0); float w = 0.0, wk;
+    wk = fract(b.x); d += wk * (texelFetch(X, tc(int(b.x)), 0).xyz - x); w += wk;
+    if (b.y >= 0.0) { wk = fract(b.y); d += wk * (texelFetch(X, tc(int(b.y)), 0).xyz - x); w += wk; }
+    if (b.z >= 0.0) { wk = fract(b.z); d += wk * (texelFetch(X, tc(int(b.z)), 0).xyz - x); w += wk; }
+    if (b.w >= 0.0) { wk = fract(b.w); d += wk * (texelFetch(X, tc(int(b.w)), 0).xyz - x); w += wk; }
+    x += 0.5 * d / max(1.0, w);
+  }
   vec3 a = mix(texelFetch(A0, tc(i), 0).xyz, texelFetch(A1, tc(i), 0).xyz, s);
   if (up && down && okc(c + 1) && okc(c - 1)) {
     vec3 aU = anchorAt(r + 1, c), aD = anchorAt(r - 1, c), aR = anchorAt(r, c + 1), aL = anchorAt(r, c - 1);
@@ -169,8 +180,9 @@ void main(){
 
 /** what the skinning shaders need to draw the cloth's points in place of the skinned ones */
 const DRAW_GLSL = `
-uniform highp sampler2D clothX; uniform int clothOn, clothW; uniform ivec4 clothPiece[10];
-vec3 clothPt(int off, int S, int r, int c){ int i = off + r * S + c; return texelFetch(clothX, ivec2(i % clothW, i / clothW), 0).xyz; }
+uniform highp sampler2D clothX, clothSeam; uniform int clothOn, clothW; uniform ivec4 clothPiece[10];
+vec3 clothTx(int i){ return texelFetch(clothX, ivec2(i % clothW, i / clothW), 0).xyz; }
+vec3 clothPt(int off, int S, int r, int c){ return clothTx(off + r * S + c); }
 void clothAt(inout vec3 q, inout vec3 nn){
   if (clothOn == 0) return;
   for (int k = 0; k < 10; k++) {
@@ -179,6 +191,9 @@ void clothAt(inout vec3 q, inout vec3 nn){
     if (P.y == 0 || rel < 0 || rel >= P.y * J) continue;
     int S = open ? J : J - 1, r = rel / J, c = rel % J; if (!open && c == S) c = 0;
     q = clothPt(P.w, S, r, c);
+    // (welded: a point sewn to another piece is drawn on the edge it's sewn to, so a seam never opens)
+    int ti = P.w + r * S + c; vec4 sw = texelFetch(clothSeam, ivec2(ti % clothW, ti / clothW), 0);
+    if (sw.x >= 0.0) q = mix(clothTx(int(sw.x)), clothTx(int(sw.y)), sw.z);
     int cR = open ? min(c + 1, S - 1) : (c + 1) % S, cL = open ? max(c - 1, 0) : (c + S - 1) % S;
     vec3 du = clothPt(P.w, S, r, cR) - clothPt(P.w, S, r, cL);
     vec3 dv = clothPt(P.w, S, min(r + 1, P.y - 1), c) - clothPt(P.w, S, max(r - 1, 0), c);
@@ -225,7 +240,7 @@ export class GpuCloth {
     if (!gl.getExtension('EXT_color_buffer_float')) { GpuCloth.failure = 'no float render targets'; return null; }
     if (!athlete.pieces?.length) { GpuCloth.failure = 'no garment pieces'; return null; }
     const units = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number;
-    if (units < 15) { GpuCloth.failure = `only ${units} texture units`; return null; }
+    if (units < 16) { GpuCloth.failure = `only ${units} texture units`; return null; }
     try { return new GpuCloth(gl, athlete); } catch (e) { GpuCloth.failure = String((e as Error)?.message ?? e).slice(0, 160); console.warn(e); return null; }
   }
 
@@ -270,16 +285,26 @@ export class GpuCloth {
       }
       offAll += p.R * S; if (p.closed) offClosed += p.R * S;
     }
-    // the seams between pieces: each point's partner's texel (−1 none)
-    const seam = new Float32Array(n * 4).fill(-1), texelOf = new Map<number, number>();
+    // the seams between pieces, welded: each sewn point's place on the other piece's edge (two texels and how far
+    // between, −1 none), and each of those points' followers (up to four: texel and share)
+    const seam = new Float32Array(n * 4).fill(-1), seamB = new Float32Array(n * 4).fill(-1), texelOf = new Map<number, number>();
     { let o2 = 0; for (const p of ps) { const S = cols(p); for (let r = 0; r < p.R; r++) for (let c = 0; c < S; c++) texelOf.set(p.base + r * p.J + c, o2 + r * S + c); o2 += p.R * S; } }
-    for (const [a, b] of athlete.seams ?? []) { const ta = texelOf.get(a), tb = texelOf.get(b); if (ta === undefined || tb === undefined) continue; if (seam[ta * 4] < 0) seam[ta * 4] = tb; if (seam[tb * 4] < 0) seam[tb * 4] = ta; }
-    for (const [k, d] of Object.entries({ bind, bindN, jt, wt, metaA, metaB, rest0: rests[0], rest1: rests[1], rest2: rests[2], seam })) this.stat[k] = this.texture(d);
+    const sewn = athlete.stitches ?? (athlete.seams ?? []).map(([a, b]) => [a, b, b, 0] as [number, number, number, number]);
+    const follow = (lead: number, f: number, w: number) => {
+      if (w <= 0.001) return;
+      for (let k = 0; k < 4; k++) if (seamB[lead * 4 + k] < 0) { seamB[lead * 4 + k] = f + Math.min(0.999, w); return; }
+    };
+    for (const [p, q, q2, t] of sewn) {
+      const tp = texelOf.get(p), tq = texelOf.get(q), tq2 = texelOf.get(q2);
+      if (tp === undefined || tq === undefined || tq2 === undefined || seam[tp * 4] >= 0) continue;
+      seam.set([tq, tq2, t, 1], tp * 4); follow(tq, tp, 1 - t); if (tq2 !== tq) follow(tq2, tp, t);
+    }
+    for (const [k, d] of Object.entries({ bind, bindN, jt, wt, metaA, metaB, rest0: rests[0], rest1: rests[1], rest2: rests[2], seam, seamB })) this.stat[k] = this.texture(d);
     const progs = { anchor: ANCHOR_FS, init: INIT_FS, predict: PREDICT_FS, solve: SOLVE_FS };
     for (const [k, fs] of Object.entries(progs)) {
       const p = this.progs[k] = program(gl, QUAD_VS, fs);
       const l: Record<string, WebGLUniformLocation | null> = {};
-      for (const u of ['W', 'N', 'Bind', 'BindN', 'Joints', 'Weights', 'bones', 'A', 'X', 'P', 'A0', 'A1', 'N0', 'N1', 'MetaA', 'MetaB', 'Rest0', 'Rest1', 'Rest2', 'Seam', 'h', 'ratio', 's0', 's1', 's', 'damp', 'drag', 'kStretch', 'kShear', 'kBend', 'omega', 'kThick', 'kUnfold', 'armA', 'armB']) l[u] = gl.getUniformLocation(p, u);
+      for (const u of ['W', 'N', 'Bind', 'BindN', 'Joints', 'Weights', 'bones', 'A', 'X', 'P', 'A0', 'A1', 'N0', 'N1', 'MetaA', 'MetaB', 'Rest0', 'Rest1', 'Rest2', 'Seam', 'SeamB', 'h', 'ratio', 's0', 's1', 's', 'damp', 'drag', 'kStretch', 'kShear', 'kBend', 'omega', 'kThick', 'kUnfold', 'armA', 'armB']) l[u] = gl.getUniformLocation(p, u);
       this.loc[k] = l;
     }
     this.vao = gl.createVertexArray()!;
@@ -287,6 +312,8 @@ export class GpuCloth {
 
   /** the texture of `f`'s cloth points now (to draw with), or null before its first step */
   points(f: object): WebGLTexture | null { return this.states.get(f)?.x ?? null; }
+  /** the welded seams (each sewn point's place on the edge it's sewn to), for drawing */
+  get seams(): WebGLTexture { return this.stat.seam; }
 
   /** run `f`'s cloth on to bout time `t`, its skin posed by `bones` (the renderer's skinning matrices), its arms
    * `arms` (four capsules: a.xyz and radius each, then b.xyz and 0 each) */
@@ -325,7 +352,7 @@ export class GpuCloth {
         st.spare = [st.x, st.p]; st.x = nx; st.p = np;
         for (let it = 0; it < CLOTH.passes; it++) {
           const out = st.spare[0];
-          this.pass('solve', this.fb([out]), { X: st.x, MetaA: this.stat.metaA, MetaB: this.stat.metaB, Rest0: this.stat.rest0, Rest1: this.stat.rest1, Rest2: this.stat.rest2, A0, A1, N0, N1, Seam: this.stat.seam }, (l) => {
+          this.pass('solve', this.fb([out]), { X: st.x, MetaA: this.stat.metaA, MetaB: this.stat.metaB, Rest0: this.stat.rest0, Rest1: this.stat.rest1, Rest2: this.stat.rest2, A0, A1, N0, N1, Seam: this.stat.seam, SeamB: this.stat.seamB }, (l) => {
             gl.uniform1f(l.s, (k + 1) / n); gl.uniform1f(l.kStretch, CLOTH.stretch); gl.uniform1f(l.kShear, CLOTH.shear); gl.uniform1f(l.kBend, CLOTH.bend); gl.uniform1f(l.omega, CLOTH.omega); gl.uniform1f(l.kThick, CLOTH.thick); gl.uniform1f(l.kUnfold, CLOTH.unfold);
             gl.uniform4fv(l.armA, arms.subarray(0, 16)); gl.uniform4fv(l.armB, arms.subarray(16, 32));
           });
@@ -350,7 +377,7 @@ export class GpuCloth {
     gl.useProgram(this.progs[name]);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.uniform1i(l.W, this.W); gl.uniform1i(l.N, this.N);
-    // (units from 4 up: the renderer keeps the shadow map, the kit atlas and the cloth's points on 0–2)
+    // (units from 4 up: the renderer keeps the shadow map, the kit atlas and the cloth's points and seams on 0–3)
     Object.entries(tex).forEach(([k, t], i) => { gl.activeTexture(gl.TEXTURE4 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(l[k], 4 + i); });
     set?.(l);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

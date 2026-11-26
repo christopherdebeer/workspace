@@ -261,10 +261,12 @@ export interface ClothPiece { kind: 'jacket' | 'sleeveW' | 'sleeveR' | 'breeches
   flat?: [number, number][] }
 export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number; pieces: ClothPiece[];
   /** what's sewn to what between pieces (vertex pairs): a drafted garment's seams */
-  seams?: [number, number][] }
+  seams?: [number, number][];
+  /** welded seams: a point drawn (and simulated) on the edge it's sewn to, between two points (p, q, q2, t) */
+  stitches?: [number, number, number, number][] }
 /** a drafted garment (devtools/piste-jacket.mjs: static/piste/jacket-draft.json), settled on the body in guard, which is
  * the athlete's resting pose: its points, triangles, paper places, seams, pieces */
-export interface Draft { x: number[]; tris: number[]; uv: number[]; seam: number[]; flat: number[]; seams: [number, number][]; pieces: { name: string; kind: ClothPiece['kind']; base: number; rows: number; cols: number }[] }
+export interface Draft { x: number[]; tris: number[]; uv: number[]; seam: number[]; flat: number[]; seams: [number, number][]; stitches?: [number, number, number, number][]; pieces: { name: string; kind: ClothPiece['kind']; base: number; rows: number; cols: number }[] }
 
 /** where the garments were sewn, as the last athlete built them (for devtools/piste-seams.mjs) */
 export const SEAMS: { what: string; rows: number[]; cols: number[]; heights: number[] }[] = [];
@@ -762,7 +764,8 @@ function dressIn(m: SkinMesh, D: Draft, bind: Frame[]): Athlete {
   for (const p of D.pieces) pieces.push({ kind: p.kind, base: base + p.base, R: p.rows, J: p.cols, closed: false, joint: p.kind === 'jacket' ? undefined : 0.55,
     flat: Array.from({ length: p.rows * p.cols }, (_, k) => [D.flat[(p.base + k) * 2], D.flat[(p.base + k) * 2 + 1]] as [number, number]) });
   const seams = D.seams.map(([a, b]) => [base + a, base + b] as [number, number]);
-  return { verts: Float32Array.from(m.v), index: Uint32Array.from(index), bind, count: index.length, pieces, seams };
+  const stitches = (D.stitches ?? []).map(([p, q, q2, t]) => [base + p, base + q, base + q2, t] as [number, number, number, number]);
+  return { verts: Float32Array.from(m.v), index: Uint32Array.from(index), bind, count: index.length, pieces, seams, stitches };
 }
 
 /** Short-range occlusion in the rest garment. The sampled shell is discarded after the shared mesh is built. */

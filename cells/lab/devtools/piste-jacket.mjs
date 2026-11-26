@@ -147,7 +147,21 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
   const pieces = G.pieces.map((pc) => ({ name: pc.name, kind: pc.kind === 'body' ? 'jacket' : pc.side === 'W' ? 'sleeveW' : 'sleeveR', base: pc.base, rows: pc.rows, cols: pc.cols }));
   const flat = G.flat.flatMap((p) => [r3(p[0]), r3(p[1])]);
   const seams = G.stitches.map((st) => [st.p, st.t < 0.5 ? st.q : st.q2]);
-  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam, pieces, flat, seams }));
+  // (welded: each point sewn to another piece follows the points it's sewn between, and they follow none themselves.
+  // A point sewn to one that's sewn on again (where three pieces meet) follows that one's own leaders; at most two)
+  const sewnTo = new Map(); for (const st of G.stitches) if (!sewnTo.has(st.p)) sewnTo.set(st.p, st);
+  const roots = (i, depth = 0) => {
+    const st = sewnTo.get(i); if (!st || depth > 8) return new Map([[i, 1]]);
+    const m = new Map(); for (const [j, w] of [[st.q, 1 - st.t], [st.q2, st.t]]) if (w > 0) for (const [k, v] of roots(j, depth + 1)) if (k !== i) m.set(k, (m.get(k) ?? 0) + v * w);
+    return m.size ? m : new Map([[i, 1]]);
+  };
+  const stitches = [];
+  for (const p of sewnTo.keys()) {
+    const top = [...roots(p)].sort((a, b) => b[1] - a[1]).slice(0, 2); if (top[0][0] === p) continue;
+    const [qa, wa] = top[0], [qb, wb] = top[1] ?? [qa, 0];
+    stitches.push([p, qa, qb, Math.round((wb / (wa + wb)) * 1000) / 1000]);
+  }
+  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam, pieces, flat, seams, stitches }));
 }
 const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
 const pointStrain = new Float64Array(G.n); S.edges.forEach((e, k) => { if (e.dir === 'across' || e.dir === 'along') { pointStrain[e.a] = Math.max(pointStrain[e.a], strain[k]); pointStrain[e.b] = Math.max(pointStrain[e.b], strain[k]); } });
