@@ -105,6 +105,8 @@ const you: Controller = {
 };
 if (lesson) thumbs.allow = { ...lesson.controls };
 const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
+// (`jacket=draft`: the jacket drafted and settled by devtools/piste-jacket.mjs, on both fencers, to see it dressed)
+if (qs.get('jacket') === 'draft') { const root = document.documentElement.dataset.assets; if (root) fetch(root + 'jacket-draft.json').then((r) => r.json()).then((d) => renderer.setDraft(d)).catch((e) => console.warn('no drafted jacket', e)); }
 const director = new TimeDirector(bout, assist);
 const recorder = replays ? new Recorder(bout) : null;
 

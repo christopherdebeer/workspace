@@ -64,6 +64,10 @@ export class Renderer {
   /** the kit simulated as cloth on the GPU (`?cloth=sim`; look/cloth.ts), or null */
   cloth: GpuCloth | null = null;
   private clothShaders = false;
+  /** a drafted jacket (`?jacket=draft`: devtools/piste-jacket.mjs), settled in guard, drawn on each fencer in place of the
+   * athlete's own jacket and sleeves: to see the pattern dressed. Its points in a fencer's frame (forward, up, right) */
+  private draft: { x: Float32Array; tris: Uint32Array; uv: Float32Array; seam: Float32Array; n: number } | null = null;
+  private noJacket: WebGLBuffer | null = null; private noJacketCount = 0;
 
   constructor(readonly canvas: HTMLCanvasElement, opts: { cloth?: boolean; clothStress?: number } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -180,6 +184,8 @@ export class Renderer {
     const poses = bout.fencers.map((f, i) => this.pose(f, bout.t, i));
     const t1 = performance.now();
     bout.fencers.forEach((f, i) => weapon(m, f, i * 101 + 7));
+    // (not on the body we're looking out of: from inside it, it's a sheet across the view)
+    if (this.draft) bout.fencers.forEach((f, i) => { if (i !== view.self) this.dressDraft(f); });
     this.poseMs = t1 - t0; this.weaponMs = performance.now() - t1;
     for (const k of view.marks ?? []) m.ellipsoid(k.p, [k.r, 0, 0], [0, k.r, 0], [0, 0, k.r], 10, 7, () => [k.c, MAT.lamp]);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf);
@@ -201,7 +207,8 @@ export class Renderer {
     gl.uniformMatrix4fv(this.uks.lvp, false, lvp);
     gl.bindVertexArray(this.skinVao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.fullIndex);
-    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); this.clothUniforms(this.uks,ps); this.bindCloth(this.uks, bout.fencers[i]); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
+    if (this.noJacket) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.noJacket);
+    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); this.clothUniforms(this.uks,ps); this.bindCloth(this.uks, bout.fencers[i]); gl.drawElements(gl.TRIANGLES, this.noJacket ? this.noJacketCount : this.athlete.count, gl.UNSIGNED_INT, 0); });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -245,8 +252,8 @@ export class Renderer {
       this.clothUniforms(U,ps); this.bindCloth(U, bout.fencers[i]);
       // The first-person sleeve continues through the elbow to the edge of the frame.
       const firstPerson = i === view.self;
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, firstPerson ? this.eyeIndex : this.fullIndex);
-      gl.drawElements(gl.TRIANGLES, firstPerson ? this.eyeCount : this.athlete.count, gl.UNSIGNED_INT, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, firstPerson ? this.eyeIndex : this.noJacket ?? this.fullIndex);
+      gl.drawElements(gl.TRIANGLES, firstPerson ? this.eyeCount : this.noJacket ? this.noJacketCount : this.athlete.count, gl.UNSIGNED_INT, 0);
     });
     // the contact capsules over them (debug)
     if (view.bodies) {
@@ -280,6 +287,26 @@ export class Renderer {
     const bend = [bendOf(f.shoulder,f.elbow,f.hand), bendOf(c[7].a,c[7].b,c[8].b)];
     const knees = [bendOf(c[9].a,c[9].b,c[10].b), bendOf(c[11].a,c[11].b,c[12].b)];
     return { hem: sec.hem, sleeve: sec.sleeve, bend, load: [...bend,...knees,1-bend[0]] };
+  }
+
+  /** dress the fencers in a drafted jacket: its settled points (fencer frame), triangles, weave coordinates and seam distances */
+  setDraft(d: { x: number[]; tris: number[]; uv: number[]; seam: number[] }) {
+    this.draft = { x: Float32Array.from(d.x), tris: Uint32Array.from(d.tris), uv: Float32Array.from(d.uv), seam: Float32Array.from(d.seam), n: d.x.length / 3 };
+    // (the athlete without its own jacket and sleeves)
+    const gl = this.gl, A = this.athlete, gone = new Uint8Array(A.verts.length / SKIN_STRIDE);
+    for (const p of A.pieces) if (p.kind !== 'breeches') gone.fill(1, p.base, p.base + p.R * p.J);
+    const keep: number[] = [];
+    for (let i = 0; i < A.index.length; i += 3) if (!gone[A.index[i]] && !gone[A.index[i + 1]] && !gone[A.index[i + 2]]) keep.push(A.index[i], A.index[i + 1], A.index[i + 2]);
+    this.noJacket = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.noJacket); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(keep), gl.STATIC_DRAW);
+    this.noJacketCount = keep.length;
+  }
+  /** the drafted jacket on a fencer, into the frame's mesh */
+  private dressDraft(f: Fencer) {
+    const D = this.draft!, F = f.frame, m = this.mesh, P: V[] = [];
+    for (let i = 0; i < D.n; i++) { const a = D.x[i * 3], b = D.x[i * 3 + 1], c = D.x[i * 3 + 2]; P.push([F.o[0] + F.f[0] * a + F.u[0] * b + F.r[0] * c, F.o[1] + F.f[1] * a + F.u[1] * b + F.r[1] * c, F.o[2] + F.f[2] * a + F.u[2] * b + F.r[2] * c]); }
+    const N = P.map(() => [0, 0, 0] as V);
+    for (let t = 0; t < D.tris.length; t += 3) { const [a, b, c] = [D.tris[t], D.tris[t + 1], D.tris[t + 2]], n = cross(sub(P[b], P[a]), sub(P[c], P[a])); for (const k of [a, b, c]) for (let j = 0; j < 3; j++) N[k][j] += n[j]; }
+    for (let t = 0; t < D.tris.length; t++) { const k = D.tris[t]; m.vert(P[k], norm(N[k]), [0.95, D.seam[k], 0], MAT.fabric, D.uv[k * 2], D.uv[k * 2 + 1]); }
   }
 
   /** draw `f`'s kit from its simulated cloth, if there is one */

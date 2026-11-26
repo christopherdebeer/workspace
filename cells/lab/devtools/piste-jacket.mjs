@@ -130,6 +130,21 @@ for (let round = 1; round <= ROUNDS; round++) {
 Object.assign(P, best.P); G = best.G; S = best.S;
 console.log(`\nbest: ${pct(best.score)} (stretch p90 and half the seams' p90 gap)`);
 writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.url), JSON.stringify(P, null, 1));
+// the settled jacket, for the game to dress the fencers in (`?jacket=draft`): its points in the fencer's frame (this one
+// stands at the origin facing +x, so its frame is the world's), its triangles, its weave's coordinates (the paper), and
+// each point's distance on the paper to its piece's edge (where the seams are)
+{
+  const r3 = (v) => Math.round(v * 1000) / 1000, tris = [], uv = [], seam = [];
+  G.pieces.forEach((pc) => {
+    for (let r = 0; r < pc.rows - 1; r++) for (let cc = 0; cc < pc.cols - 1; cc++) { const a = pc.base + r * pc.cols + cc; tris.push(a, a + 1, a + pc.cols + 1, a, a + pc.cols + 1, a + pc.cols); }
+    for (let r = 0; r < pc.rows; r++) for (let cc = 0; cc < pc.cols; cc++) {
+      const i = pc.base + r * pc.cols + cc, p = G.flat[i]; uv.push(r3(Math.abs(p[0])), r3(p[1]));
+      const ed = (j) => Math.hypot(p[0] - G.flat[j][0], p[1] - G.flat[j][1]);
+      seam.push(r3(Math.min(ed(pc.base + r * pc.cols), ed(pc.base + r * pc.cols + pc.cols - 1), ed(pc.base + cc), ed(pc.base + (pc.rows - 1) * pc.cols + cc))));
+    }
+  });
+  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam }));
+}
 const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
 const pointStrain = new Float64Array(G.n); S.edges.forEach((e, k) => { if (e.dir === 'across' || e.dir === 'along') { pointStrain[e.a] = Math.max(pointStrain[e.a], strain[k]); pointStrain[e.b] = Math.max(pointStrain[e.b], strain[k]); } });
 const tris = [];
