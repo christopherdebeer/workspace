@@ -135,8 +135,21 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
 // each point's distance on the paper to its piece's edge (where the seams are)
 {
   const r3 = (v) => Math.round(v * 1000) / 1000, tris = [], uv = [], seam = [];
+  // (each piece's triangles wound to face out, away from the body: the quarters are mirror images on the paper, so the
+  // same order on every grid turns two of them inside out. Each piece votes, triangle by triangle, on which way its
+  // normal points against the nearest axis of the body under it)
+  const Xs = (i) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
+  const axisNear = (p, caps) => { let best = null, bd = Infinity; for (const c of caps) { const ab = c.b.map((v, k) => v - c.a[k]), t = Math.max(0, Math.min(1, ab.reduce((s2, v, k) => s2 + v * (p[k] - c.a[k]), 0) / Math.max(1e-12, ab.reduce((s2, v) => s2 + v * v, 0)))), q2 = c.a.map((v, k) => v + ab[k] * t), d = Math.hypot(...p.map((v, k) => v - q2[k])) - (c.ra + (c.rb - c.ra) * t); if (d < bd) { bd = d; best = q2; } } return best; };
+  const flipped = [];
   G.pieces.forEach((pc) => {
-    for (let r = 0; r < pc.rows - 1; r++) for (let cc = 0; cc < pc.cols - 1; cc++) { const a = pc.base + r * pc.cols + cc; tris.push(a, a + 1, a + pc.cols + 1, a, a + pc.cols + 1, a + pc.cols); }
+    let vote = 0;
+    for (let r = 0; r < pc.rows - 1; r++) for (let cc = 0; cc < pc.cols - 1; cc++) {
+      const a = pc.base + r * pc.cols + cc, A = Xs(a), Bp = Xs(a + 1), C = Xs(a + pc.cols + 1), u = Bp.map((v, k) => v - A[k]), w = C.map((v, k) => v - A[k]);
+      const nrm = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], mid = A.map((v, k) => (v + Bp[k] + C[k]) / 3), ax = axisNear(mid, pc.kind === 'sleeve' ? B.sleeveCaps : B.bodyCaps);
+      vote += Math.sign(nrm.reduce((s2, v, k) => s2 + v * (mid[k] - ax[k]), 0));
+    }
+    const out = vote >= 0; if (!out) flipped.push(pc.name);
+    for (let r = 0; r < pc.rows - 1; r++) for (let cc = 0; cc < pc.cols - 1; cc++) { const a = pc.base + r * pc.cols + cc; if (out) tris.push(a, a + 1, a + pc.cols + 1, a, a + pc.cols + 1, a + pc.cols); else tris.push(a, a + pc.cols + 1, a + 1, a, a + pc.cols, a + pc.cols + 1); }
     for (let r = 0; r < pc.rows; r++) for (let cc = 0; cc < pc.cols; cc++) {
       const i = pc.base + r * pc.cols + cc, p = G.flat[i]; uv.push(r3(Math.abs(p[0])), r3(p[1]));
       const ed = (j) => Math.hypot(p[0] - G.flat[j][0], p[1] - G.flat[j][1]);
@@ -161,6 +174,7 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
     const [qa, wa] = top[0], [qb, wb] = top[1] ?? [qa, 0];
     stitches.push([p, qa, qb, Math.round((wb / (wa + wb)) * 1000) / 1000]);
   }
+  console.log('turned right way out:', flipped.join(', ') || 'none');
   writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam, pieces, flat, seams, stitches }));
 }
 const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);

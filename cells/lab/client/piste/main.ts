@@ -106,7 +106,12 @@ const you: Controller = {
 if (lesson) thumbs.allow = { ...lesson.controls };
 const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
 // (`jacket=draft`: the jacket drafted and settled by devtools/piste-jacket.mjs, on both fencers, to see it dressed)
-if (qs.get('jacket') === 'draft') { const root = document.documentElement.dataset.assets; if (root) fetch(root + 'jacket-draft.json').then((r) => r.json()).then((d) => renderer.setDraft(d)).catch((e) => console.warn('no drafted jacket', e)); }
+// (dressed before anything runs, so a still's cloth has the same history in either jacket)
+const dressed: Promise<void> = (() => {
+  const root = document.documentElement.dataset.assets;
+  if (qs.get('jacket') !== 'draft' || !root) return Promise.resolve();
+  return fetch(root + 'jacket-draft.json').then((r) => r.json()).then((d) => renderer.setDraft(d)).catch((e) => console.warn('no drafted jacket', e));
+})();
 const director = new TimeDirector(bout, assist);
 const recorder = replays ? new Recorder(bout) : null;
 
@@ -363,8 +368,7 @@ function tick(dt: number, record: boolean) {
 }
 // (run on first, for a still)
 const t0 = Number(qs.get('t') ?? 0) || 0;
-for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); if (s > t0 - 1.5) renderer.simulate(bout); }
-recorder?.reset();
+function runOn() { for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); if (s > t0 - 1.5) renderer.simulate(bout); } recorder?.reset(); }
 
 // ─── the camera by hand, while watching (a replay; a bout nobody's fencing): drag to orbit, pinch to zoom, two fingers
 // (or the right button, or shift) to pan, a double tap to put it back. It moves the automatic camera, which goes on
@@ -506,5 +510,5 @@ function publish() {
     startReplay: (from: number, to: number) => startReplay(from, to, to),
   };
 }
-requestAnimationFrame(frame);
+dressed.then(() => { runOn(); requestAnimationFrame(frame); });
 
