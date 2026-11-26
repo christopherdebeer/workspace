@@ -134,7 +134,11 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
         // (laid round the body: its angle from the centre in proportion to the quarter's width there)
         const S = slice(B, hem + y), theta = (Math.PI / 2) * Math.min(1.05, x / Math.max(0.05, interp(P.stations, W, Math.min(v, P.armhole))));
         const dir = norm(add(scale(B.r, front ? -Math.cos(theta) : Math.cos(theta)), scale(B.f, side * Math.sin(theta))));
-        piece.at.push(madd(S.c, dir, S.radius(dir) + 0.03));
+        // (what the quarter has beyond the block's height climbs over the shoulder: its front or back reach drawn in
+        // toward the seam on top, a little higher, so it starts near where it's sewn)
+        const extra = Math.max(0, vPaper - v), p0 = madd(S.c, dir, S.radius(dir) + 0.03);
+        const toward = dot(sub(p0, S.c), B.r), inward = Math.max(-Math.abs(toward), Math.min(Math.abs(toward), extra)) * Math.sign(toward);
+        piece.at.push(madd(madd(p0, B.r, -inward), [0, 1, 0], Math.min(0.03, extra * 0.3)));
       }
     }
     pieces.push(piece); flatAll.push(...piece.flat); atAll.push(...piece.at); n += ROWS * COLS;
@@ -160,7 +164,13 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     for (let r = ROWS - 1; r >= armRow; r--) loop.push(at(Bk, r, COLS - 1));
     const L: number[] = [0]; for (let k = 1; k < loop.length; k++) { const a = flatAll[loop[k - 1]], b = flatAll[loop[k]]; L.push(L[k - 1] + Math.hypot(a[0] - b[0], a[1] - b[1])); }
     const armholeLen = L[L.length - 1];
-    const round = S.round.map((x, k) => (k === 0 ? armholeLen * (1 + P.capEase) : x));
+    // the cap: as wide as the sleeve's round just below it; its height solved (bisection) so the curve across its top
+    // is the armhole's length and the cap's ease, the crown opposite the underarm seam (Fab's sleeve head)
+    const round = S.round.map((x, k) => (k === 0 ? S.round[1] * 1.02 : x));
+    const wCap = round[0], capCurve = (hgt: number) => Array.from({ length: SCOLS }, (_, c2) => { const u = c2 / (SCOLS - 1); return [u * wCap, -hgt * Math.sin(Math.PI * u) ** 2] as [number, number]; });
+    const curveLen = (pts: [number, number][]) => pts.slice(1).reduce((a, p, k) => a + Math.hypot(p[0] - pts[k][0], p[1] - pts[k][1]), 0);
+    let lo = 0, hi = 0.3; for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (curveLen(capCurve(m)) < armholeLen * (1 + P.capEase)) lo = m; else hi = m; }
+    const capH = (lo + hi) / 2, cap = capCurve(capH), capL: number[] = [0]; for (let k = 1; k < SCOLS; k++) capL.push(capL[k - 1] + Math.hypot(cap[k][0] - cap[k - 1][0], cap[k][1] - cap[k - 1][1]));
     const segs = [len(sub(arm[1], arm[0])), len(sub(arm[2], arm[1]))], total = segs[0] + segs[1];
     const along = (t: number): [V, V] => { const d = t * total; return d < segs[0] ? [madd(arm[0], norm(sub(arm[1], arm[0])), d), norm(sub(arm[1], arm[0]))] : [madd(arm[1], norm(sub(arm[2], arm[1])), d - segs[0]), norm(sub(arm[2], arm[1]))]; };
     const piece: Piece = { name: `sleeve ${s}`, rows: SROWS, cols: SCOLS, flat: [], at: [], base: n, kind: 'sleeve', side: s };
@@ -168,7 +178,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       const t = r / (SROWS - 1), rnd = interp(S.stations, round, t), [p, d] = along(t * Math.min(1, S.length / total));
       const down = norm(sub([0, -1, 0], scale(d, -d[1]))), side2 = cross(d, down);
       for (let c = 0; c < SCOLS; c++) {
-        piece.flat.push([(c / (SCOLS - 1)) * rnd, t * S.length]);
+        // (the cap's crown carried down into the first rows, fading out where the sleeve is a plain tube)
+        const fade = 1 - Math.min(1, (t * S.length) / Math.max(0.04, capH * 1.6));
+        piece.flat.push([(c / (SCOLS - 1)) * rnd, t * S.length + cap[c][1] * fade * fade]);
         const phi = (c / (SCOLS - 1)) * Math.PI * 2, rad = Math.min(0.09, rnd / (Math.PI * 2) + 0.01);
         piece.at.push(madd(madd(p, down, Math.cos(phi) * rad), side2, Math.sin(phi) * rad));
       }
@@ -178,7 +190,8 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     for (let r = 0; r < SROWS; r++) pair(n + r * SCOLS + SCOLS - 1, n + r * SCOLS);
     const quarterway = atAll[n + Math.round(SCOLS / 4)], nearFront = len(sub(quarterway, atAll[loop[Math.floor(loop.length / 4)]])) < len(sub(quarterway, atAll[loop[Math.floor((3 * loop.length) / 4)]]));
     for (let c = 0; c < SCOLS - 1; c++) {
-      const want = (nearFront ? c / (SCOLS - 1) : 1 - c / (SCOLS - 1)) * armholeLen;
+      // (by length along the cap's curve: each cap point to its share of the armhole)
+      const share = capL[c] / capL[SCOLS - 1], want = (nearFront ? share : 1 - share) * armholeLen;
       let k = 0; while (k < L.length - 2 && L[k + 1] < want) k++;
       stitches.push({ p: n + c, q: loop[k], q2: loop[k + 1], t: (want - L[k]) / Math.max(1e-9, L[k + 1] - L[k]) });
     }

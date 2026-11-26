@@ -13,7 +13,7 @@ import { type V } from '../v3';
 
 export interface Settled { x: Float64Array; edges: { a: number; b: number; rest: number; dir: 'across' | 'along' | 'diag' | 'bend'; piece: number }[] }
 
-export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[] } = {}): Settled {
+export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number } = {}): Settled {
   const n = G.n, x = new Float64Array(n * 3), prev = new Float64Array(n * 3);
   G.at.forEach((p, i) => { x.set(p, i * 3); prev.set(p, i * 3); });
   const edges: Settled['edges'] = [];
@@ -36,7 +36,8 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
       const j = i * 3 + a, v = (x[j] - prev[j]) * 0.9;
       prev[j] = x[j]; x[j] += v + (a === 1 ? -9.81 * h * h : 0);
     }
-    for (let it = 0; it < 3; it++) {
+    // (passes enough for stiff cloth to come to its lengths: off line, there's time)
+    for (let it = 0; it < (o.passes ?? 10); it++) {
       for (const e of edges) {
         const a = e.a * 3, b = e.b * 3, dx = x[b] - x[a], dy = x[b + 1] - x[a + 1], dz = x[b + 2] - x[a + 2], l = Math.hypot(dx, dy, dz);
         if (l < 1e-9) continue;
