@@ -320,24 +320,59 @@ export function buildAthlete(): Athlete {
   });
   // the armholes: where each sleeve is sewn on, a patch of the jacket's grid round the shoulder, a little below the joint
   // where the arm hangs from it, cut out. Its edge (36 points) is the sleeve's first ring (below)
+  const SS = 36, SEW = 6;
   const TS = 48, TJ = TS + 1, torsoP = loftPoints(torsoRings, { seg: TS, fit: fitShoulder } as LoftOpt);
-  const armhole = (joint: V, toward: V) => {
-    // (the cells the arm's tube passes through, near the shoulder: a bounding patch of the grid round them)
-    const ax = norm(sub(toward, joint)), a0 = madd(joint, ax, -0.03), a1 = madd(joint, ax, 0.03);
-    const offAxis = (q: V) => { const t = Math.max(0, Math.min(1, dot(sub(q, a0), sub(a1, a0)) / dot(sub(a1, a0), sub(a1, a0)))); return len(sub(q, lerp(a0, a1, t))); };
-    let jc = 0, best = Infinity;
-    for (let i = 30; i < 66; i++) for (let j = 0; j < TS; j++) { const d = len(sub(torsoP[i][j], joint)); if (d < best) { best = d; jc = j; } }
-    let i0 = 99, i1 = -1, d0 = 99, d1 = -99;
-    for (let i = 30; i < 66; i++) for (let dj = -12; dj <= 12; dj++) {
-      const j = ((jc + dj) % TS + TS) % TS, jn = (j + 1) % TS;
-      const q = scale(add(add(torsoP[i][j], torsoP[i + 1][j]), add(torsoP[i][jn], torsoP[i + 1][jn])), 0.25);
-      if (offAxis(q) < 0.058) { i0 = Math.min(i0, i); i1 = Math.max(i1, i + 1); d0 = Math.min(d0, dj); d1 = Math.max(d1, dj + 1); }
+  // whether a point is inside the jacket's body: in the plane of the ring nearest its height, inside that ring's outline
+  const insideTorso = (q: V): boolean => {
+    let i = 0, bd = Infinity;
+    for (let k = 20; k < 68; k++) { const d = Math.abs(dot(sub(q, torsoRings[k].c), spine)); if (d < bd) { bd = d; i = k; } }
+    const r = torsoRings[i], x = dot(sub(q, r.c), r.u), y = dot(sub(q, r.c), r.w);
+    let inside = false;
+    for (let j = 0, k = TS - 1; j < TS; k = j++) {
+      const a = sub(torsoP[i][j], r.c), b2 = sub(torsoP[i][k], r.c), ax2 = dot(a, r.u), ay = dot(a, r.w), bx = dot(b2, r.u), by = dot(b2, r.w);
+      if ((ay > y) !== (by > y) && x < ((bx - ax2) * (y - ay)) / (by - ay) + ax2) inside = !inside;
     }
-    // (no higher than the top of the shoulder, below where the jacket narrows into its collar: the jacket's shoulder
-    // covers the cap's top there, as a shoulder seam does)
-    i1 = Math.min(i1, 59); i0 = Math.min(i0, i1 - 6);
-    const j0 = jc + d0, j1 = jc + d1;
-    const col = (j: number) => ((j % TS) + TS) % TS;
+    return inside;
+  };
+  /**
+   * An armhole: where the sleeve meets the jacket. For each of the sleeve's columns, along its surface (a line parallel
+   * to the arm, at the cap's radius) to where it comes out of the jacket's body: those points are the sleeve's first
+   * ring, on the jacket's surface, so no part of the sleeve is inside the body to be seen into. Where the cap stands
+   * above the shoulder (its line never inside), the jacket's nearest point. The jacket's cut round them: the patch of
+   * its grid that holds them, whose edge is sewn to them by a band lying on its surface.
+   */
+  const R0 = 0.058;
+  const armhole = (joint: V, toward: V) => {
+    const ax = norm(sub(toward, joint)), [ua, wa] = axesAbout(ax, F.u);
+    const nearestGrid = (q: V): [number, number] => { let bi = 0, bj = 0, bd = Infinity; for (let i = 36; i < 64; i++) for (let j = 0; j < TS; j++) { const d = len(sub(torsoP[i][j], q)); if (d < bd) { bd = d; bi = i; bj = j; } } return [bi, bj]; };
+    const dirOf = (j: number) => { const a = (j / SS) * Math.PI * 2; return add(scale(ua, Math.cos(a)), scale(wa, Math.sin(a))); };
+    const exits: number[] = Array.from({ length: SS }, (_, j) => {
+      const at = (t: number) => madd(madd(joint, ax, t), dirOf(j), R0);
+      let was = false, exit = NaN;
+      for (let t = -0.12; t <= 0.12; t += 0.002) { const ins = insideTorso(at(t)); if (was && !ins) { exit = t; break; } was = ins; }
+      if (Number.isNaN(exit)) return NaN;
+      let lo = exit - 0.002, hi = exit;
+      for (let k = 0; k < 12; k++) { const mid = (lo + hi) / 2; if (insideTorso(at(mid))) lo = mid; else hi = mid; }
+      return hi;
+    });
+    // (where the cap stands above the shoulder: at the found ones' middle distance along the arm, out from the axis to
+    // the shoulder's surface, so the curve goes on smoothly over the top of the shoulder)
+    const found = exits.filter((e) => !Number.isNaN(e)).sort((x, y) => x - y), tMid = found.length ? found[found.length >> 1] : 0;
+    const curve: V[] = exits.map((e, j) => {
+      if (!Number.isNaN(e)) return madd(madd(joint, ax, e), dirOf(j), R0);
+      const base0 = madd(joint, ax, tMid);
+      if (!insideTorso(base0)) { const [i, jj] = nearestGrid(madd(base0, dirOf(j), R0)); return torsoP[i][jj]; }
+      let lo = 0, hi = R0;
+      for (let k = 0; k < 14; k++) { const mid = (lo + hi) / 2; if (insideTorso(madd(base0, dirOf(j), mid))) lo = mid; else hi = mid; }
+      return madd(base0, dirOf(j), hi);
+    });
+    // (the jacket's patch round the curve: its grid's rows and columns, a ring of cells clear of it)
+    const cells = curve.map(nearestGrid), jc = cells[0][1];
+    const rel = (j: number) => ((j - jc + TS + TS / 2) % TS) - TS / 2;
+    let i0 = Math.min(...cells.map((c2) => c2[0])) - 1, i1 = Math.max(...cells.map((c2) => c2[0])) + 1;
+    const d0 = Math.min(...cells.map((c2) => rel(c2[1]))) - 1, d1 = Math.max(...cells.map((c2) => rel(c2[1]))) + 1;
+    i1 = Math.min(i1, 64); i0 = Math.max(20, Math.min(i0, i1 - 4));
+    const j0 = jc + d0, j1 = jc + d1, col = (j: number) => ((j % TS) + TS) % TS;
     const loop: [number, number][] = [];
     for (let j = j0; j < j1; j++) loop.push([i0, col(j)]);
     for (let i = i0; i < i1; i++) loop.push([i, col(j1)]);
@@ -345,13 +380,17 @@ export function buildAthlete(): Athlete {
     for (let i = i1; i > i0; i--) loop.push([i, col(j0)]);
     const inside = (i: number, j: number) => i >= i0 && i < i1 && col(j - j0) < j1 - j0;
     const all: [number, number][] = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) all.push([i, col(j)]);
-    return { loop, inside, all, pts: loop.map(([i, j]) => torsoP[i][j]), joint, ax, rows: [i0, i1], cols: [col(j0), col(j1)] };
+    // (the curve stood 3 mm off the jacket, outward from the arm's axis, so the two don't flicker where they meet)
+    const proud = curve.map((q) => { const t = dot(sub(q, joint), ax), rad = sub(q, madd(joint, ax, t)); return madd(q, norm(rad), 0.003); });
+    return { loop, inside, all, pts: loop.map(([i, j]) => torsoP[i][j]), curve: proud, joint, ax, rows: [i0, i1], cols: [col(j0), col(j1)] };
   };
   const holes = [armhole(f.shoulder, f.elbow), armhole(c[7].a, c[7].b)];
   SEAMS.length = 0;
   holes.forEach((h, k) => SEAMS.push({ what: k ? 'rear armhole' : 'weapon armhole', rows: h.rows, cols: h.cols, heights: h.rows.map((i) => torsoP[i][0][1] - hy) }));
   const torso = loft(m, torsoRings, {
-    hole: (i, j) => holes.some((h) => h.inside(i, j)),
+    // (no hole: the sleeve's first ring lies on the jacket's surface, just proud of it, the jacket going on under it,
+    // so there's nothing to see into from any angle)
+
     fold: { driver: 4, relief: (row,a) => {
       const front = 0.5-0.5*Math.sin(a);
       return front*(0.012*pleat(row,0.50+0.16*Math.cos(a),0.035)
@@ -378,7 +417,6 @@ export function buildAthlete(): Athlete {
   // ── sleeves: the cap out of the shoulder, full through the upper arm, the elbow, the forearm to the cuff ──────────
   // (each sleeve sewn onto its armhole: its first ring is the armhole's edge, the jacket's own points; over its first
   // few rings it goes from the armhole's shape to its own round one, and from the jacket's weights to its own)
-  const SS = 36, SEW = 6;
   const sleeve = (pts: V[], up1: number, fore: number, partTop: number, armSign: number, seam: ReturnType<typeof armhole>) => {
     const pa = path(pts), sE = pa.joints[0], N = 55;
     const rings: Ring[] = [];
@@ -407,23 +445,10 @@ export function buildAthlete(): Athlete {
     const edgeV = seam.loop.map(([i, j]) => torso.base + i * TJ + j), edgeA = seam.pts.map(around);
     const nearest = (j: number) => { const a = (j / SS) * Math.PI * 2; let bk = 0, bd = 9; edgeA.forEach((e, k) => { const d = Math.abs(((e - a + 3 * Math.PI) % (2 * Math.PI)) - Math.PI); if (d < bd) { bd = d; bk = k; } }); return edgeV[bk]; };
     const sewn = (i: number) => smooth(Math.min(1, i / SEW));
-    // (the armhole's edge, read round the sleeve by angle: the sleeve's first ring lies on it, so the band that sews them
-    // can't turn inside out; over the next rings it eases into the sleeve's own round)
-    const byAngle = seam.pts.map((q, k) => ({ q, a: edgeA[k] })).sort((x, y) => x.a - y.a);
-    const onEdge = (a: number): V => {
-      const n = byAngle.length;
-      for (let k = 0; k < n; k++) {
-        const A0 = byAngle[k], A1 = byAngle[(k + 1) % n], a0 = A0.a, a1 = k + 1 < n ? A1.a : A1.a + Math.PI * 2;
-        const aa = a < a0 ? a + Math.PI * 2 : a;
-        if (aa >= a0 && aa <= a1) return lerp(A0.q, A1.q, (aa - a0) / Math.max(1e-6, a1 - a0));
-      }
-      return byAngle[0].q;
-    };
     // the inside of the elbow (toward the chord from shoulder to wrist) gathers as it bends
     const E = pts[1], inner = norm(sub(lerp(pts[0], pts[2], 0.5), E));
     loft(m, rings, {
-      stitch: { v: edgeV, p: seam.pts },
-      place: (i, j, p) => (i < SEW ? lerp(onEdge((j / SS) * Math.PI * 2), p, sewn(i)) : p),
+      place: (i, j, p) => (i < SEW ? lerp(seam.curve[j % SS], p, sewn(i)) : p),
       fold: { driver: armSign > 0 ? 0 : 1, relief: (row,a,radial) => {
         const compression = 0.12 + 0.88 * smooth((1 + dot(radial,inner)) * 0.5);
         // Two oblique gathers form at the inside elbow and flatten across the outside.
