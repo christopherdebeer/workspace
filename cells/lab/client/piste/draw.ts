@@ -14,6 +14,7 @@ import { weapon, capsules } from './look/figure';
 import { buildAthlete, boneFrames, skinMatrices, Secondary, bendOf, SKIN_STRIDE, BONES, PART, type Athlete } from './look/athlete';
 import type { Fencer } from './fencer';
 import { MAIN_VS, MAIN_FS, SHADOW_VS, SHADOW_FS, SKIN_VS, SKIN_SHADOW_VS } from './look/shaders';
+import { GpuCloth, withCloth } from './look/cloth';
 import { type V, cross, dot, norm, sub } from './v3';
 
 export interface View {
@@ -60,15 +61,21 @@ export class Renderer {
   private bones = [new Float32Array(BONES * 16), new Float32Array(BONES * 16)];
   /** time spent last frame, ms: posing (joints and springs), and the weapons built on the CPU */
   poseMs = 0; weaponMs = 0;
+  /** the kit simulated as cloth on the GPU (`?cloth=sim`; look/cloth.ts), or null */
+  cloth: GpuCloth | null = null;
+  private clothShaders = false;
 
-  constructor(readonly canvas: HTMLCanvasElement) {
+  constructor(readonly canvas: HTMLCanvasElement, opts: { cloth?: boolean } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL 2 is needed');
     this.gl = gl;
     this.main = program(gl, MAIN_VS, MAIN_FS);
     this.shade = program(gl, SHADOW_VS, SHADOW_FS);
     for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha']) this.u[k] = gl.getUniformLocation(this.main, k);
-    this.skin = program(gl, SKIN_VS, MAIN_FS);
+    // (with the cloth spliced into the skinning, if asked for and it splices; otherwise as before)
+    let skinVS = SKIN_VS, shadowVS = SKIN_SHADOW_VS;
+    if (opts.cloth) try { skinVS = withCloth(SKIN_VS, false); shadowVS = withCloth(SKIN_SHADOW_VS, true); this.clothShaders = true; } catch (e) { console.warn(e); }
+    this.skin = program(gl, skinVS, MAIN_FS);
     this.kitTexture = gl.createTexture()!;
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.kitTexture);
@@ -91,10 +98,19 @@ export class Renderer {
       gl.uniform1i(gl.getUniformLocation(pass, 'kitAtlas'), 1);
     }
     gl.activeTexture(gl.TEXTURE0);
-    this.skinShade = program(gl, SKIN_SHADOW_VS, SHADOW_FS);
+    this.skinShade = program(gl, shadowVS, SHADOW_FS);
     for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uk[k] = gl.getUniformLocation(this.skin, k);
     for (const k of ['lvp', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
     this.athlete = buildAthlete();
+    if (this.clothShaders) {
+      this.cloth = GpuCloth.create(gl, this.athlete);
+      for (const [pass, U] of [[this.skin, this.uk], [this.skinShade, this.uks]] as const) {
+        gl.useProgram(pass);
+        for (const k of ['clothX', 'clothOn', 'clothW', 'clothPiece']) U[k] = gl.getUniformLocation(pass, k);
+        gl.uniform1i(U.clothX, 2); gl.uniform1i(U.clothOn, 0);
+        if (this.cloth) { gl.uniform1i(U.clothW, this.cloth.W); gl.uniform4iv(U.clothPiece, this.cloth.pieces); }
+      }
+    }
     this.skinVao = gl.createVertexArray()!;
     gl.bindVertexArray(this.skinVao);
     const vb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, this.athlete.verts, gl.STATIC_DRAW);
@@ -184,7 +200,7 @@ export class Renderer {
     gl.uniformMatrix4fv(this.uks.lvp, false, lvp);
     gl.bindVertexArray(this.skinVao);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.fullIndex);
-    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); this.clothUniforms(this.uks,ps); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
+    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); this.clothUniforms(this.uks,ps); this.bindCloth(this.uks, bout.fencers[i]); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -225,7 +241,7 @@ export class Renderer {
     gl.bindVertexArray(this.skinVao);
     poses.forEach((ps, i) => {
       gl.uniformMatrix4fv(U.bones, false, this.bones[i]);
-      this.clothUniforms(U,ps);
+      this.clothUniforms(U,ps); this.bindCloth(U, bout.fencers[i]);
       // The first-person sleeve continues through the elbow to the edge of the frame.
       const firstPerson = i === view.self;
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, firstPerson ? this.eyeIndex : this.fullIndex);
@@ -250,6 +266,7 @@ export class Renderer {
   /** a fencer's joints this frame (into this.bones[i]), and its secondary motion */
   pose(f: Fencer, t: number, i: number) {
     skinMatrices(boneFrames(f), this.athlete.bind, this.bones[i]);
+    this.cloth?.step(f, t, this.bones[i], f.s);
     let sec = this.secondary.get(f);
     if (!sec) { sec = new Secondary(); this.secondary.set(f, sec); }
     sec.update(f, t);
@@ -257,6 +274,14 @@ export class Renderer {
     const bend = [bendOf(f.shoulder,f.elbow,f.hand), bendOf(c[7].a,c[7].b,c[8].b)];
     const knees = [bendOf(c[9].a,c[9].b,c[10].b), bendOf(c[11].a,c[11].b,c[12].b)];
     return { hem: sec.hem, sleeve: sec.sleeve, bend, load: [...bend,...knees,1-bend[0]] };
+  }
+
+  /** draw `f`'s kit from its simulated cloth, if there is one */
+  private bindCloth(u: Record<string, WebGLUniformLocation | null>, f: Fencer) {
+    if (!this.clothShaders) return;
+    const gl = this.gl, x = this.cloth?.points(f) ?? null;
+    gl.uniform1i(u.clothOn, x ? 1 : 0);
+    if (x) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, x); gl.activeTexture(gl.TEXTURE0); }
   }
 
   private clothUniforms(u: Record<string,WebGLUniformLocation|null>, p: ReturnType<Renderer['pose']>) {

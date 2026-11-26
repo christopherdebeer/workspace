@@ -93,7 +93,7 @@ const you: Controller = {
   },
 };
 if (lesson) thumbs.allow = { ...lesson.controls };
-const renderer = new Renderer(canvas);
+const renderer = new Renderer(canvas, { cloth: qs.get('cloth') === 'sim' });
 const director = new TimeDirector(bout, assist);
 const recorder = replays ? new Recorder(bout) : null;
 
@@ -295,6 +295,7 @@ function readOut(rate: number) {
     `bow  you ${f(me.blade.bow() * 100, 1)} cm  them ${f(op.blade.bow() * 100, 1)} cm`,
     `hand effort  you ${f(me.blade.effort[1] * 100, 0)}%  them ${f(op.blade.effort[1] * 100, 0)}%   ext ${f(me.extension)}`,
     `critical ${f(director.critical)}  assist ${f(director.assist)}   arm fatigue you ${f(me.fatigue)}  them ${f(op.fatigue)}`,
+    renderer.cloth ? `cloth: simulated, ${f(renderer.cloth.issueMs, 1)} ms to issue (the GPU's own time shows in the fps)` : 'cloth: posed',
     them instanceof Opponent ? `them: ${them.tactic}` : runner ? `lesson: ${runner.stage}` : `them: ${ai}`,
   ].join('\n');
 }

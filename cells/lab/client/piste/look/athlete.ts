@@ -86,7 +86,7 @@ export function skinMatrices(now: Frame[], bind: Frame[], out: Float32Array) {
 // ─── the mesh, built once ───────────────────────────────────────────────────────────────────────────────────────────
 type W = [number, number][];
 class SkinMesh {
-  v: number[] = []; i: number[] = [];
+  v: number[] = []; i: number[] = []; pieces: ClothPiece[] = [];
   get n() { return this.v.length / SKIN_STRIDE; }
   vert(p: V, nr: V, col: C, mat: number, uv: [number, number], w: W, extra: [number, number, number, number], atlas: [number, number] = [-1,-1], fold: V = [0,0,0], normalChange: V = [0,0,0], driver = 0): number {
     const ws = [...w].sort((a, b) => b[1] - a[1]).slice(0, 4), tot = ws.reduce((s, x) => s + x[1], 0) || 1;
@@ -103,6 +103,8 @@ interface LoftOpt {
   weights: (i: number, j: number, p: V) => W; extra?: (i: number, j: number, p: V) => [number, number, number, number];
   /** fabric: (circumference uv, along uv, distance to a seam) are worked out from the shape */
   fit?: (p: V) => V;
+  /** a garment piece the cloth simulation may take over */
+  cloth?: { kind: ClothPiece['kind']; joint?: number };
   fold?: { driver: number; relief: (row: number, angle: number, radial: V) => number };
   panel?: number;
   panelUV?: (i: number, j: number, p: V) => [number, number];
@@ -171,6 +173,7 @@ function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
       m.vert(p, nr, col, mat, uv, o.weights(i, j, p), o.extra ? o.extra(i, j, p) : [0, 0, 0, 0], atlas, displacement, normalChange, o.fold?.driver ?? 0);
     }
   }
+  if (o.cloth) m.pieces.push({ ...o.cloth, base, R, J, closed: !open });
   for (let i = 0; i < R - 1; i++) for (let j = 0; j < S; j++) {
     const a = base + i * J + j, b = base + i * J + (j + 1) % J, c = base + (i + 1) * J + (j + 1) % J, d = base + (i + 1) * J + j;
     m.tri(a, d, c); m.tri(a, c, b);
@@ -218,7 +221,10 @@ function pleat(x: number, centre: number, width: number) {
 
 function axesAbout(d: V, hint: V): [V, V] { const u = perp(hint, d); return [u, cross(d, u)]; }
 
-export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number }
+/** a garment piece the cloth simulation can take over (look/cloth.ts): a loft's grid of R rings by J columns from
+ * vertex `base` (closed round: the last column repeats the first), what it is, and where its joint falls (row fraction) */
+export interface ClothPiece { kind: 'jacket' | 'sleeveW' | 'sleeveR' | 'breeches'; joint?: number; base: number; R: number; J: number; closed: boolean }
+export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number; pieces: ClothPiece[] }
 
 export function buildAthlete(): Athlete {
   const f = new Fencer(EPEE, 0, 1);
@@ -280,7 +286,7 @@ export function buildAthlete(): Athlete {
       return front*(0.012*pleat(row,0.50+0.16*Math.cos(a),0.035)
         - 0.009*pleat(row,0.39+0.10*Math.cos(a),0.045));
     } },
-    fit: fitShoulder, panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
+    cloth: { kind: 'jacket' }, fit: fitShoulder, panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
     weights: (i, j, p) => {
       const h = p[1] - hy, k = blend(h, 0.18, 0.4);
       const w: W = [[B.pelvis, 1 - k], [B.chest, k]];
@@ -322,7 +328,7 @@ export function buildAthlete(): Athlete {
         return compression*(0.014*pleat(row,sE-0.13+0.045*Math.sin(a),0.031)
           + 0.011*pleat(row,sE+0.055-0.041*Math.cos(a),0.027));
       } },
-      fit: fitShoulder, panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
+      cloth: { kind: armSign > 0 ? 'sleeveW' : 'sleeveR', joint: sE }, fit: fitShoulder, panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
       weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.40 * (1 - smooth(blend(s, 0, 0.16))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
       extra: (i, j, p) => {
         const s = i / (N - 1), near = Math.max(0, 1 - Math.abs(s - sE) / 0.13), face = Math.max(0, dot(norm(sub(p, rings[i].c)), inner));
@@ -373,7 +379,7 @@ export function buildAthlete(): Athlete {
       const slack = 0.5-0.5*Math.cos(a);
       return slack*(0.013*pleat(row,0.78+0.06*Math.sin(a),0.045)
         + 0.009*pleat(row,0.88-0.025*Math.sin(a),0.03));
-    } }, panel: 2, seg: 32, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
+    } }, cloth: { kind: 'breeches', joint: sK / band }, panel: 2, seg: 32, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
     // the band: a narrow cuff, a little proud
     const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.07, 0.067] }; });
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
@@ -549,7 +555,7 @@ export function buildAthlete(): Athlete {
   }
 
   bakeContactShade(m);
-  return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length };
+  return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: m.pieces };
 }
 
 /** Short-range occlusion in the rest garment. The sampled shell is discarded after the shared mesh is built. */
