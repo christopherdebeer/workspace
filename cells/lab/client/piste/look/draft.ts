@@ -141,7 +141,10 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       for (let c = 0; c < COLS; c++) {
         const x = xl + (xr - xl) * (c / (COLS - 1));
         const y = v - P.drop * (c / (COLS - 1)) * sArm * sArm;
-        piece.flat.push([x, vPaper - P.drop * (c / (COLS - 1)) * sArm * sArm]);
+        // (the climb over the shoulder is deep at the neck, where the chest is, and shallow at the shoulder point: the extra
+        // length tapers across the panel, so it doesn't make the armhole deeper)
+        const climb = 1 - 0.8 * (c / (COLS - 1)), vCol = v + (vPaper - v) * climb;
+        piece.flat.push([x, vCol - P.drop * (c / (COLS - 1)) * sArm * sArm]);
         // (laid round the body: its angle from the centre in proportion to the quarter's width there)
         // (laid at its height on the paper, up to the top of the body; what's beyond that climbs over the shoulder)
         const yLay = Math.min(vPaper, P.length) - P.drop * (c / (COLS - 1)) * sArm * sArm;
@@ -224,8 +227,11 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     // (the cap's first half to the armhole's front edge: the loop starts at the front's underarm)
     const nearFront = true;
     for (let c = 0; c < SCOLS - 1; c++) {
-      // (by length along the cap's curve: each cap point to its share of the armhole)
-      const share = capL[c] / capL[SCOLS - 1], want = (nearFront ? share : 1 - share) * armholeLen;
+      // (the crown's notch to the shoulder seam, and each half of the cap eased into its own half of the armhole: the
+      // front's edge is longer than the back's (it climbs over the chest), so sewing round the whole by length would
+      // put the crown off the shoulder seam and drag both)
+      const frontLen = L[ROWS - armRow - 1], share0 = capL[c] / capL[SCOLS - 1], share = nearFront ? share0 : 1 - share0;
+      const want = share <= 0.5 ? (share / 0.5) * frontLen : frontLen + ((share - 0.5) / 0.5) * (armholeLen - frontLen);
       let k = 0; while (k < L.length - 2 && L[k + 1] < want) k++;
       stitches.push({ p: n + c, q: loop[k], q2: loop[k + 1], t: (want - L[k]) / Math.max(1e-9, L[k + 1] - L[k]), seam: `sleeve cap ${s}` });
     }

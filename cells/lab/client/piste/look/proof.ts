@@ -10,6 +10,11 @@
  */
 import type { Garment } from './draft';
 import { settle } from './settle';
+import type { Capsule } from '../fencer';
+
+/** how stretched an edge is, for judging: its fraction over its paper length; but a very short edge (a cell squeezed at a
+ * corner of the paper) is judged by how far it's stretched in millimetres, 2 mm counting as 1 % */
+const judged = (l: number, rest: number) => (rest < 0.02 ? Math.max(0, l - rest) / 0.2 : l / rest - 1);
 
 export interface Check { what: string; ok: boolean; detail: string }
 
@@ -40,6 +45,12 @@ export function paperChecks(G: Garment, o: { capEase: number }): Check[] {
       loop.sort((i, j) => i - j);
       const pieceOfQ = (i: number) => G.pieces.findIndex((pc) => i >= pc.base && i < pc.base + pc.rows * pc.cols);
       b = 0; for (let k = 1; k < loop.length; k++) if (pieceOfQ(loop[k]) === pieceOfQ(loop[k - 1])) b += flatDist(G, loop[k - 1], loop[k]);
+      // (and each half into its own half: the crown at the shoulder seam)
+      const sl2 = G.pieces.find((pc) => st[0].p >= pc.base && st[0].p < pc.base + pc.rows * pc.cols)!, mid = Math.round((sl2.cols - 1) / 2);
+      const crown = st.find((x) => x.p === sl2.base + mid) ?? st[mid], crownQ = crown.t < 0.5 ? crown.q : crown.q2;
+      const pieceOf2 = (i: number) => G.pieces.find((pc) => i >= pc.base && i < pc.base + pc.rows * pc.cols)!, pq = pieceOf2(crownQ);
+      const atTop = Math.floor((crownQ - pq.base) / pq.cols) >= pq.rows - 2;
+      out.push({ what: `${name}: the crown at the shoulder seam`, ok: atTop, detail: `the crown sewn to ${pq.name} row ${Math.floor((crownQ - pq.base) / pq.cols)} of ${pq.rows}` });
       const ratio = a / Math.max(1e-9, b) - 1;
       out.push({ what: `${name}: the cap is the armhole's length and its ease (${(o.capEase * 100).toFixed(0)} %)`, ok: Math.abs(ratio - o.capEase) < 0.03, detail: `cap ${(a * 100).toFixed(1)} cm, armhole ${(b * 100).toFixed(1)} cm (${(ratio * 100).toFixed(1)} %)` });
     } else {
@@ -108,14 +119,34 @@ export function airChecks(G: Garment): { checks: Check[]; x: Float64Array } {
     out.push({ what: `${name}: sewn right side out (its edges run opposite ways round their pieces)`, ok: against === 0 && along > 0, detail: `${along} steps right, ${against} wrong` });
   }
   const capRows = (i: number) => G.pieces.some((pc) => pc.kind === 'sleeve' && i >= pc.base && i < pc.base + 3 * pc.cols);
-  const strains = S.edges.filter((e) => (e.dir === 'across' || e.dir === 'along') && !capRows(e.a)).map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1).map((v) => Math.max(0, v)).sort((a, b) => a - b);
+  const strains = S.edges.filter((e) => (e.dir === 'across' || e.dir === 'along') && !capRows(e.a)).map((e) => judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest)).map((v) => Math.max(0, v)).sort((a, b) => a - b);
   const p99 = strains[Math.floor(strains.length * 0.99)];
   const where = new Map<string, number>();
-  for (const e of S.edges) { if ((e.dir !== 'across' && e.dir !== 'along') || capRows(e.a)) continue; const sv = Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1; if (sv < p99) continue;
+  for (const e of S.edges) { if ((e.dir !== 'across' && e.dir !== 'along') || capRows(e.a)) continue; const sv = judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest); if (sv < p99) continue;
     const pc = G.pieces[e.piece], r = Math.floor((e.a - pc.base) / pc.cols), c = (e.a - pc.base) % pc.cols, key = `${pc.name} ${e.dir} row ${r} col ${c}`; where.set(key, sv); }
   const worst = [...where].sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${k} ${(v * 100).toFixed(1)}%`).join('; ');
   // (stretch only: sewn up with nothing inside it, cloth buckles where it's shaped to a body (a sleeve head to a shoulder),
   // and buckling is free; a fault in the making stretches it)
   out.push({ what: 'sewn up, nothing is stretched (99 % of the cloth under 1 %; not the cap, eased in on purpose)', ok: p99 < 0.01, detail: `99th percentile ${(p99 * 100).toFixed(2)} %; worst: ${worst}` });
   return { checks: out, x: S.x };
+}
+
+/**
+ * Sewn up on a dress form: the trunk, the shoulders and the neck, no arms, no gravity, nothing pinned. Where sewing up in
+ * the air left the cloth stretched, a form filling it tells shaping (a sleeve head cut to cup a shoulder: filled, it eases)
+ * from a fault in the making (still stretched).
+ */
+export function formChecks(G: Garment, form: Capsule[], regions: { name: string; at: (piece: string, r: number, c: number) => boolean }[]): Check[] {
+  const S = settle(G, form, { seconds: 4, gravity: 0, free: true, sleeveCaps: form, passes: 10 });
+  const out: Check[] = [];
+  const stretch = (e: (typeof S.edges)[number]) => judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest);
+  const edges = S.edges.filter((e) => e.dir === 'across' || e.dir === 'along');
+  for (const rg of regions) {
+    const vals = edges.filter((e) => { const pc = G.pieces[e.piece]; return rg.at(pc.name, Math.floor((e.a - pc.base) / pc.cols), (e.a - pc.base) % pc.cols); }).map(stretch).map((v) => Math.max(0, v)).sort((a, b) => a - b);
+    const p95 = vals[Math.floor(vals.length * 0.95)] ?? 0, mx = vals[vals.length - 1] ?? 0;
+    out.push({ what: `on the form, ${rg.name}: not stretched (95 % under 1.5 %)`, ok: p95 < 0.015, detail: `95th percentile ${(p95 * 100).toFixed(1)} %, most ${(mx * 100).toFixed(1)} % (${vals.length} edges)` });
+  }
+  const all = edges.map(stretch).map((v) => Math.max(0, v)).sort((a, b) => a - b), p99 = all[Math.floor(all.length * 0.99)];
+  out.push({ what: 'on the form, nothing is stretched (99 % under 1 %)', ok: p99 < 0.01, detail: `99th percentile ${(p99 * 100).toFixed(2)} %` });
+  return out;
 }

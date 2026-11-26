@@ -12,4 +12,11 @@ let fails = 0;
 const show = (title, list) => { console.log(`\n${title}`); for (const k of list) { if (!k.ok) fails++; console.log(`${k.ok ? 'ok  ' : 'FAIL'}  ${k.what} — ${k.detail}`); } };
 show('on the paper', M.paperChecks(G, { capEase: P.capEase }));
 show('sewn up in the air', M.airChecks(G).checks);
+// the regions sewing up in the air left stretched: each sleeve's head below the crown, and each back's shoulder point
+const head = (side) => (pc, r, c) => pc === `sleeve ${side}` && r >= 3 && r <= 12 && c >= 5 && c <= 12;
+const point = (q) => (pc, r, c) => pc === q && r >= 26 && c >= 9;
+const regions = [{ name: 'the weapon sleeve\'s head', at: head('W') }, { name: 'the rear sleeve\'s head', at: head('R') }, { name: 'the back\'s shoulder point, weapon side', at: point('BW') }, { name: 'the back\'s shoulder point, rear side', at: point('BR') }];
+const inAir = M.formChecks(G, [], regions).map((k) => ({ ...k, what: k.what.replace('on the form', 'in the air') }));
+show('the same regions, sewn up in the air (for comparison)', inAir);
+show('sewn up on a dress form (trunk, shoulders, neck; no arms)', M.formChecks(G, B.trunk, regions));
 console.log(fails ? `\n${fails} failed` : '\nall proved');
