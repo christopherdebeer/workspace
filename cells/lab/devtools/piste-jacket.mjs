@@ -143,7 +143,11 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
       seam.push(r3(Math.min(ed(pc.base + r * pc.cols), ed(pc.base + r * pc.cols + pc.cols - 1), ed(pc.base + cc), ed(pc.base + (pc.rows - 1) * pc.cols + cc))));
     }
   });
-  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam }));
+  // (and to simulate it: its pieces (grids on their paper), each point's place on the paper, what's sewn to what)
+  const pieces = G.pieces.map((pc) => ({ name: pc.name, kind: pc.kind === 'body' ? 'jacket' : pc.side === 'W' ? 'sleeveW' : 'sleeveR', base: pc.base, rows: pc.rows, cols: pc.cols }));
+  const flat = G.flat.flatMap((p) => [r3(p[0]), r3(p[1])]);
+  const seams = G.stitches.map((st) => [st.p, st.t < 0.5 ? st.q : st.q2]);
+  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam, pieces, flat, seams }));
 }
 const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
 const pointStrain = new Float64Array(G.n); S.edges.forEach((e, k) => { if (e.dir === 'across' || e.dir === 'along') { pointStrain[e.a] = Math.max(pointStrain[e.a], strain[k]); pointStrain[e.b] = Math.max(pointStrain[e.b], strain[k]); } });

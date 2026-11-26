@@ -256,13 +256,20 @@ function axesAbout(d: V, hint: V): [V, V] { const u = perp(hint, d); return [u, 
  * vertex `base` (closed round: the last column repeats the first), what it is, and where its joint falls (row fraction) */
 export interface ClothPiece { kind: 'jacket' | 'sleeveW' | 'sleeveR' | 'breeches'; joint?: number; base: number; R: number; J: number; closed: boolean;
   /** vertices held to the skin (an armhole's edge, where a sleeve is sewn on, and the cloth cut out inside it) */
-  pins?: number[] }
-export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number; pieces: ClothPiece[] }
+  pins?: number[];
+  /** a flat pattern piece (closed: false): each of its points' places on the paper, for its lengths at rest */
+  flat?: [number, number][] }
+export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number; pieces: ClothPiece[];
+  /** what's sewn to what between pieces (vertex pairs): a drafted garment's seams */
+  seams?: [number, number][] }
+/** a drafted garment (devtools/piste-jacket.mjs: static/piste/jacket-draft.json), settled on the body in guard, which is
+ * the athlete's resting pose: its points, triangles, paper places, seams, pieces */
+export interface Draft { x: number[]; tris: number[]; uv: number[]; seam: number[]; flat: number[]; seams: [number, number][]; pieces: { name: string; kind: ClothPiece['kind']; base: number; rows: number; cols: number }[] }
 
 /** where the garments were sewn, as the last athlete built them (for devtools/piste-seams.mjs) */
 export const SEAMS: { what: string; rows: number[]; cols: number[]; heights: number[] }[] = [];
 
-export function buildAthlete(): Athlete {
+export function buildAthlete(o: { draft?: Draft } = {}): Athlete {
   const f = new Fencer(EPEE, 0, 1);
   f.pose();
   const m = new SkinMesh(), bind = boneFrames(f), c = f.capsules, F = f.frame, up: V = [0, 1, 0];
@@ -721,7 +728,41 @@ export function buildAthlete(): Athlete {
   }
 
   bakeContactShade(m);
+  if (o.draft) return dressIn(m, o.draft, bind);
   return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: m.pieces };
+}
+
+/**
+ * The athlete in a drafted garment instead of its own jacket and sleeves: theirs taken out, the draft's pieces put in. A
+ * drafted point follows the body as the nearest point of the jacket it replaces did (its joints and weights); the cloth
+ * simulation takes them as flat pieces, sewn at their seams (look/cloth.ts).
+ */
+function dressIn(m: SkinMesh, D: Draft, bind: Frame[]): Athlete {
+  const old = m.pieces.filter((p) => p.kind !== 'breeches'), gone = new Uint8Array(m.n);
+  for (const p of old) gone.fill(1, p.base, p.base + p.R * p.J);
+  const oldIds: number[] = []; for (let i = 0; i < m.n; i++) if (gone[i]) oldIds.push(i);
+  const index: number[] = [];
+  for (let i = 0; i < m.i.length; i += 3) if (!gone[m.i[i]] && !gone[m.i[i + 1]] && !gone[m.i[i + 2]]) index.push(m.i[i], m.i[i + 1], m.i[i + 2]);
+  const at = (i: number): V => [D.x[i * 3], D.x[i * 3 + 1], D.x[i * 3 + 2]], n = D.x.length / 3, base = m.n;
+  // (normals from its triangles, as settled)
+  const N = Array.from({ length: n }, () => [0, 0, 0] as V);
+  for (let t = 0; t < D.tris.length; t += 3) { const [a, b, c] = [D.tris[t], D.tris[t + 1], D.tris[t + 2]], nr = cross(sub(at(b), at(a)), sub(at(c), at(a))); for (const k of [a, b, c]) for (let j = 0; j < 3; j++) N[k][j] += nr[j]; }
+  const pieceOf = (i: number) => D.pieces.find((p) => i >= p.base && i < p.base + p.rows * p.cols)!;
+  for (let i = 0; i < n; i++) {
+    const p = at(i);
+    let best = oldIds[0], bd = Infinity; for (const j of oldIds) { const v = j * SKIN_STRIDE, d = (m.v[v] - p[0]) ** 2 + (m.v[v + 1] - p[1]) ** 2 + (m.v[v + 2] - p[2]) ** 2; if (d < bd) { bd = d; best = j; } }
+    const v = best * SKIN_STRIDE, w: W = [0, 1, 2, 3].map((k) => [m.v[v + 12 + k], m.v[v + 16 + k]] as [number, number]).filter((e) => e[1] > 0);
+    const pc = pieceOf(i), row = Math.floor((i - pc.base) / pc.cols) / (pc.rows - 1);
+    // (what the eye inside the mask doesn't see of its own body: the jacket, the rear sleeve, the top of its own sleeve)
+    const part = pc.kind === 'jacket' ? PART.torso : pc.kind === 'sleeveR' ? PART.rearArm : row < 0.4 ? PART.upperSleeve : PART.always;
+    m.vert(p, norm(N[i]), [0.95, D.seam[i], TONE.jacket], MAT.fabric, [D.uv[i * 2], D.uv[i * 2 + 1]], w, [0, 0, 0, part]);
+  }
+  for (const t of D.tris) index.push(base + t);
+  const pieces: ClothPiece[] = m.pieces.filter((p) => p.kind === 'breeches');
+  for (const p of D.pieces) pieces.push({ kind: p.kind, base: base + p.base, R: p.rows, J: p.cols, closed: false, joint: p.kind === 'jacket' ? undefined : 0.55,
+    flat: Array.from({ length: p.rows * p.cols }, (_, k) => [D.flat[(p.base + k) * 2], D.flat[(p.base + k) * 2 + 1]] as [number, number]) });
+  const seams = D.seams.map(([a, b]) => [base + a, base + b] as [number, number]);
+  return { verts: Float32Array.from(m.v), index: Uint32Array.from(index), bind, count: index.length, pieces, seams };
 }
 
 /** Short-range occlusion in the rest garment. The sampled shell is discarded after the shared mesh is built. */
