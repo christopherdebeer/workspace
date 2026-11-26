@@ -267,7 +267,12 @@ export class Renderer {
   /** a fencer's joints this frame (into this.bones[i]), and its secondary motion */
   pose(f: Fencer, t: number, i: number) {
     skinMatrices(boneFrames(f), this.athlete.bind, this.bones[i]);
-    this.cloth?.step(f, t, this.bones[i], f.s);
+    if (this.cloth) {
+      // (the arms, upper and fore each side, for the jacket to lie against)
+      const arms = new Float32Array(32);
+      [4, 5, 7, 8].forEach((k, q) => { const c = f.capsules[k]; arms.set([...c.a, c.ra], q * 4); arms.set([...c.b, 0], 16 + q * 4); });
+      this.cloth.step(f, t, this.bones[i], f.s, arms);
+    }
     let sec = this.secondary.get(f);
     if (!sec) { sec = new Secondary(); this.secondary.set(f, sec); }
     sec.update(f, t);
