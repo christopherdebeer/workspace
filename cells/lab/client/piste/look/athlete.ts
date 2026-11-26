@@ -58,7 +58,8 @@ export function boneFrames(f: Fencer): Frame[] {
     frame(grip, ax, thumb),
     frame(c[7].a, sub(c[7].b, c[7].a), F.u),
     frame(c[8].a, sub(c[8].b, c[8].a), F.u),
-    frame(c[8].b, rearHandDir, F.r),
+    // (the rear hand hangs palm in, toward the thigh, the thumb forward)
+    frame(c[8].b, rearHandDir, scale(F.r, -1)),
     frame(c[9].a, sub(c[9].b, c[9].a), kneePoleF),
     frame(c[10].a, sub(c[10].b, c[10].a), kneePoleF),
     frame(c[13].a, sub(c[13].b, c[13].a), up),
@@ -235,10 +236,11 @@ export function buildAthlete(): Athlete {
   // ── the jacket: one body from the hem to the collar, a sloping shoulder each side ────────────────────────────────
   const pelvis = c[0].a, neck = c[1].b, spine = norm(sub(neck, pelvis));
   const hy = pelvis[1];
-  // (heights above the pelvis: section half-widths along the shoulder line (f) and across (r), and the chest's fullness)
+  // (heights above the pelvis: section half-widths along the shoulder line (f) and across (r), and the chest's fullness;
+  // across the shoulders just beyond the joints (fencer.ts), so the sleeves' caps make the shoulders' outline)
   const H: [number, number, number, number][] = [
     [-0.09, 0.17, 0.118, 0], [-0.03, 0.166, 0.116, 0], [0.12, 0.146, 0.106, 0.004], [0.28, 0.168, 0.129, 0.012],
-    [0.38, 0.205, 0.131, 0.01], [0.43, 0.211, 0.121, 0.004], [0.47, 0.186, 0.101, 0], [0.5, 0.134, 0.083, 0], [0.53, 0.068, 0.06, 0], [0.555, 0.062, 0.056, 0],
+    [0.38, 0.19, 0.131, 0.01], [0.43, 0.188, 0.121, 0.004], [0.47, 0.165, 0.101, 0], [0.5, 0.128, 0.083, 0], [0.53, 0.068, 0.06, 0], [0.555, 0.062, 0.056, 0],
   ];
   // Orient each cross-section along the anatomical landmark it passes through.
   const hipLine = norm(sub(c[9].a,c[11].a));
@@ -295,7 +297,8 @@ export function buildAthlete(): Athlete {
       const w: W = [[B.pelvis, 1 - k], [B.chest, k]];
       // (near each shoulder the jacket takes a share of that arm: reaching, the arm draws it across the chest)
       for (const [sh, bone] of [[f.shoulder, B.upperW], [c[7].a, B.upperR]] as const) {
-        const d = len(sub(p, sh)), s = Math.max(0, 1 - d / 0.16) * 0.45;
+        // (the same share the sleeve's cap gives the chest where they meet, so jacket and sleeve move as one garment there)
+        const d = len(sub(p, sh)), s = Math.max(0, 1 - d / 0.2) * 0.6;
         if (s > 0) { for (const e of w) e[1] *= 1 - s; w.push([bone, s]); }
       }
       return w;
@@ -313,7 +316,7 @@ export function buildAthlete(): Athlete {
       const [u, w] = axesAbout(tangent, F.u);
       // (fitted to an athlete's arm with a sleeve's ease: about 36 cm round the upper arm, 31 round the forearm, measured by
       // devtools/piste-proportions.mjs; the cap fuller where it's set into the shoulder)
-      const r = prof([[0, 0.052], [0.07, 0.07], [0.16, 0.064], [sE - 0.06, 0.054], [sE, 0.052], [sE + 0.1, 0.05], [0.85, 0.044], [1, 0.041]], s);
+      const r = prof([[0, 0.064], [0.07, 0.074], [0.16, 0.064], [sE - 0.06, 0.054], [sE, 0.052], [sE + 0.1, 0.05], [0.85, 0.044], [1, 0.041]], s);
       rings.push({ c: p, u, w, r: a => {
         const lift = Math.cos(a + armSign * 0.6);
         const inside = 0.44 + 0.38 * lift;
@@ -334,7 +337,7 @@ export function buildAthlete(): Athlete {
           + 0.011*pleat(row,sE+0.055-0.041*Math.cos(a),0.027));
       } },
       cloth: { kind: armSign > 0 ? 'sleeveW' : 'sleeveR', joint: sE }, fit: fitShoulder, panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
-      weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.40 * (1 - smooth(blend(s, 0, 0.16))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
+      weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.4 * (1 - smooth(blend(s, 0, 0.2))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
       extra: (i, j, p) => {
         const s = i / (N - 1), near = Math.max(0, 1 - Math.abs(s - sE) / 0.13), face = Math.max(0, dot(norm(sub(p, rings[i].c)), inner));
         return [0, armSign * Math.min(1, s * 1.4) * 0.8, armSign * near * face, armSign < 0 || s < sE - 0.14 ? partTop : PART.always];
@@ -342,8 +345,9 @@ export function buildAthlete(): Athlete {
     });
   };
   const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.092);
-  sleeve([madd(madd(lerp(f.shoulder, c[7].a, 0.16), up, 0.004), F.r, -0.02), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
-  sleeve([madd(madd(lerp(c[7].a, f.shoulder, 0.16), up, 0.0), F.r, 0.012), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
+  // (each sleeve set in at the top of the shoulder, a little in from the joint, its cap over the jacket's shoulder edge)
+  sleeve([madd(madd(lerp(f.shoulder, c[7].a, 0.1), up, 0.028), F.r, -0.02), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
+  sleeve([madd(madd(lerp(c[7].a, f.shoulder, 0.1), up, 0.012), F.r, 0.012), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
 
   // An inset gusset closes the small opening between the two leg tops under the hem.
   const gusset: Ring[] = Array.from({ length: 12 }, (_, i) => {
