@@ -136,6 +136,10 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 - **The numbers are estimates.** The FIE gives the blade's length, the guard, the tip's spring and the lockout. The blade's stiffness, the arm's strength and the hand's mass are estimated, and left as dials to be measured.
 
 
+## The menu
+
+The menu sits over a bout of its own: two of the AI fencing behind it, ceremony and all, from the side on a wide screen and from high behind on a tall one. A tap on the room hides the menu to watch, and another brings it back. It has four ways in. Learn opens the lessons. Practice fences a partner at a level you choose. Challenge is the levels in turn: beat one and the next is unlocked, and a tap goes on to it. Settings covers the right thumb's scheme, the camera, the kit (posed or simulated cloth), what happens between touches, replays and the readout. They're kept on this device (`settings.ts`), and a flag in the address still wins over a setting.
+
 ## Between touches
 
 A bout you fence opens with a warm-up. You're free to step, extend and lunge to get the feel, the opponent loosens up on its line, and nothing scores. Hold both thumbs still for three seconds (or the mouse, or Enter) and it begins, counted down over the salute. A replay of a touch waits at its end: see it again, or go on.

@@ -24,17 +24,25 @@ import { Recorder, type Replay } from './replay';
 import { LESSONS, LessonRunner } from './lessons';
 import { type V, add, clamp, lerp, madd } from './v3';
 import { seedFrom } from '../kit/rng';
+import { CHOICES, loadSettings, saveSettings, challengeBeaten, setChallengeBeaten, type Settings } from './settings';
 
 const qs = new URLSearchParams(location.search);
-const preview = qs.has('preview'), auto = preview || qs.has('auto'), readout = qs.has('readout');
+// (the player's settings, kept on this device; a flag in the address wins over one)
+const settings = loadSettings();
+const pick = <K extends keyof Settings>(k: K): string => qs.get(k) ?? settings[k];
+const preview = qs.has('preview'), watchFlag = preview || qs.has('auto');
 const seed = seedFrom(qs.get('seed')) ?? 1;
 const weapon = WEAPONS[qs.get('weapon') ?? ''] ?? EPEE;
 const timeScale = Math.min(4, Math.max(0.02, Number(qs.get('time') ?? 1) || 1));
-const viewMode = (qs.get('view') ?? 'mask') as 'mask' | 'side' | 'over';
 const lesson = LESSONS.find((l) => l.id === qs.get('lesson')) ?? null;
 const BOUT_FLAGS = ['study', 'auto', 'preview', 'level', 'ai', 'weapon', 'to', 'view', 't', 'still', 'readout', 'time', 'assist', 'seed'];
 const mode: 'menu' | 'lesson' | 'bout' = lesson ? 'lesson' : BOUT_FLAGS.some((f) => qs.has(f)) ? 'bout' : 'menu';
-const level = LEVELS[clamp(Math.round(Number(qs.get('level') ?? 2)), 0, LEVELS.length - 1)] ?? LEVELS[2];
+// (the menu has a bout of its own running behind it, two of the AI fencing, from the side on a wide screen and from high
+// behind on a tall one)
+const auto = watchFlag || mode === 'menu', readout = mode !== 'menu' && (qs.has('readout') || settings.readout === 'on');
+const viewMode = (mode === 'menu' ? (innerWidth >= innerHeight ? 'side' : 'over') : pick('view')) as 'mask' | 'side' | 'over';
+const levelIdx = clamp(Math.round(Number(qs.get('level') ?? 2)), 0, LEVELS.length - 1), challenge = qs.has('challenge');
+const level = LEVELS[levelIdx] ?? LEVELS[2];
 const assist = preview ? 0 : qs.has('assist') ? clamp(Number(qs.get('assist')) || 0, 0, 1) : mode === 'lesson' ? 0 : level.assist;
 /**
  * The study: five seconds in the room, nearly uneventful, to judge the look by: the opponent takes one step closer, you
@@ -43,7 +51,7 @@ const assist = preview ? 0 : qs.has('assist') ? clamp(Number(qs.get('assist')) |
 const study = qs.has('study'), clothStudy = qs.get('study') === 'cloth', retreatStudy = qs.get('study') === 'retreat';
 /** look flags: the figures as plain grey models; the contact capsules over them */
 const clay = qs.has('clay'), bodies = qs.has('bodies');
-const replays = !preview && !study && qs.get('replay') !== '0';
+const replays = !preview && !study && mode !== 'menu' && pick('replay') !== '0' && pick('replay') !== 'off';
 
 const body = document.body;
 body.classList.add(mode);
@@ -55,7 +63,7 @@ if (readout) body.classList.add('readout');
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = document.querySelector('canvas')!;
 // (the ceremony: before the bout, between touches and after it; `ceremony=0` puts them straight back on their lines)
-const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study, ceremony: mode === 'bout' && qs.get('ceremony') !== '0', warmup: mode === 'bout' && !auto && !study });
+const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study, ceremony: (mode === 'bout' || mode === 'menu') && pick('ceremony') !== '0' && pick('ceremony') !== 'off', warmup: mode === 'bout' && !auto && !study });
 /** the study's script, by the bout's clock (it loops every six seconds) */
 const STUDY = { step: 0.9, roll: [2.0, 2.8] as [number, number], rollTo: 0.6, loop: 6 };
 const studyClock = () => bout.t % STUDY.loop;
@@ -80,7 +88,7 @@ const studyThem: Controller = { intent: () => {
 } };
 
 const thumbs = new Thumbs(canvas);
-thumbs.scheme = qs.get('thumb') === 'point' ? 'point' : 'hand';
+thumbs.scheme = pick('thumb') === 'point' ? 'point' : 'hand';
 const ai = qs.get('ai') ?? 'sparring';
 const runner = lesson ? new LessonRunner(bout, lesson, seed) : null;
 const them: Controller = study ? studyThem : runner ? runner.coach : ai === 'dummy' ? new Dummy(0) : ai === 'line' ? new Dummy(1) : new Opponent(bout, 1, qs.has('level') ? level.style : SPARRING, seed);
@@ -96,7 +104,7 @@ const you: Controller = {
   },
 };
 if (lesson) thumbs.allow = { ...lesson.controls };
-const renderer = new Renderer(canvas, { cloth: qs.get('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
+const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
 const director = new TimeDirector(bout, assist);
 const recorder = replays ? new Recorder(bout) : null;
 
@@ -206,7 +214,12 @@ function hear(events: BoutEvent[]) {
     else if (e.type === 'halt' && mode === 'bout') say(e.call || 'halt', `${e.points[0] || e.points[1] ? 'point' : 'no point'}`);
     else if (e.type === 'reset' && mode === 'bout' && bout.phase === 'ready') say('en garde', '');
     else if (e.type === 'allez' && mode === 'bout') { say('allez', ''); setTimeout(() => { if ($('say').textContent === 'allez') say('', ''); }, 700); }
-    else if (e.type === 'over') say(e.winner === 0 ? 'you win' : 'they win', 'tap to fence again');
+    else if (e.type === 'over') {
+      // (the challenge: beating the level you're on unlocks the next; a tap goes on to it, or tries again)
+      if (challenge && e.winner === 0 && challengeBeaten() <= levelIdx) setChallengeBeaten(levelIdx + 1);
+      const next = challenge && e.winner === 0 ? levelIdx + 1 : -1;
+      say(e.winner === 0 ? 'you win' : 'they win', challenge ? (next >= LEVELS.length ? 'the challenge is done: every level beaten' : next > 0 ? `next: ${LEVELS[next].name} · tap to go on` : 'tap to try again') : 'tap to fence again');
+    }
     else if (e.type === 'time') say('time', '');
     else if (e.type === 'priority') say('a minute more', `priority: ${e.who === 0 ? 'you' : 'them'} (it wins if the minute runs out level)`);
     else if (e.type === 'clash' && e.strength > 0.8) navigator.vibrate?.(Math.min(25, 4 + e.strength * 4));
@@ -223,7 +236,15 @@ function scoreboard(b: Bout) {
   $('arm').style.setProperty('--f', String(f));
   $('arm').classList.toggle('on', f > 0.12);
 }
-canvas.addEventListener('pointerdown', () => { $('hint').style.opacity = '0'; if (bout.phase === 'over') { bout.restart(); say('', ''); } });
+canvas.addEventListener('pointerdown', () => {
+  // (in the menu, a tap on the room hides the menu to watch the bout behind it, and brings it back)
+  if (mode === 'menu') { body.classList.toggle('watching'); return; }
+  $('hint').style.opacity = '0';
+  if (bout.phase === 'over') {
+    if (challenge && bout.score[0] > bout.score[1] && levelIdx + 1 < LEVELS.length) { location.search = `?level=${levelIdx + 1}&challenge`; return; }
+    bout.restart(); say('', '');
+  }
+});
 
 // ─── a lesson: its brief, its count and pace, its verdicts ──────────────────────────────────────────────────────────
 const PASSED = 'piste.passed';
@@ -271,6 +292,24 @@ if (mode === 'menu') {
   $('mLessons').innerHTML = LESSONS.map((l, i) => `<a href="?lesson=${l.id}"><b>${i + 1}</b>${l.title}${done.includes(l.id) ? '<em>✓</em>' : ''}</a>`).join('');
   const help = ['bullet time at every crisis', 'some bullet time', 'a little bullet time', 'no help'];
   $('mLevels').innerHTML = LEVELS.map((l, i) => `<a href="?level=${i}"><b>${l.name}</b><span>${help[i]}</span></a>`).join('');
+  // (the challenge: the levels in turn, from the first not yet beaten)
+  const beaten = challengeBeaten(), at = Math.min(beaten, LEVELS.length - 1);
+  ($('mChallenge') as HTMLAnchorElement).href = `?level=${at}&challenge`;
+  $('mChallengeSub').textContent = beaten >= LEVELS.length ? 'every level beaten: fence the master again' : beaten > 0 ? `next: ${LEVELS[at].name} (${beaten} of ${LEVELS.length} beaten)` : `beat each level in turn, from ${LEVELS[0].name}`;
+  // (the settings: each a row of choices, kept as they're tapped)
+  const opts = $('mOpts');
+  const paint = () => {
+    opts.innerHTML = CHOICES.map((c) => `<div class="opt"><span>${c.label}</span><div>${c.options.map(([v, l]) => `<button data-k="${c.key}" data-v="${v}" class="${settings[c.key] === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`).join('');
+  };
+  paint();
+  opts.addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest('button'); if (!b) return;
+    (settings as unknown as Record<string, string>)[b.dataset.k!] = b.dataset.v!; saveSettings(settings); paint();
+  });
+  // (the home screen's calls to action open their panels; back returns)
+  const show = (id: string) => { for (const p of ['mHome', 'mLearn', 'mPractice', 'mSettings']) $(p).hidden = p !== id; };
+  document.querySelectorAll<HTMLElement>('#menu [data-go]').forEach((el) => el.addEventListener('click', () => show(el.dataset.go!)));
+  document.querySelectorAll<HTMLElement>('#menu .back').forEach((el) => el.addEventListener('click', () => show('mHome')));
 }
 
 // ─── the marks under the thumbs ─────────────────────────────────────────────────────────────────────────────────────
@@ -305,7 +344,7 @@ function readOut(rate: number) {
     `bow  you ${f(me.blade.bow() * 100, 1)} cm  them ${f(op.blade.bow() * 100, 1)} cm`,
     `hand effort  you ${f(me.blade.effort[1] * 100, 0)}%  them ${f(op.blade.effort[1] * 100, 0)}%   ext ${f(me.extension)}`,
     `critical ${f(director.critical)}  assist ${f(director.assist)}   arm fatigue you ${f(me.fatigue)}  them ${f(op.fatigue)}`,
-    renderer.cloth ? `cloth: simulated ×${renderer.cloth.stress}, ${renderer.cloth.passes} passes a frame` : qs.get('cloth') === 'sim' ? `cloth: posed (failed: ${GpuCloth.failure ?? 'unknown'})` : 'cloth: posed',
+    renderer.cloth ? `cloth: simulated ×${renderer.cloth.stress}, ${renderer.cloth.passes} passes a frame` : pick('cloth') === 'sim' ? `cloth: posed (failed: ${GpuCloth.failure ?? 'unknown'})` : 'cloth: posed',
     them instanceof Opponent ? `them: ${them.tactic}` : runner ? `lesson: ${runner.stage}` : `them: ${ai}`,
   ].join('\n');
 }
@@ -346,7 +385,9 @@ function frame(now: number) {
   const real = Math.max(0, (now - last) / 1000), wall = Math.min(0.05, real);
   last = now;
   if (replay) runReplay(wall);
-  else if (mode !== 'menu' && !qs.has('still')) {
+  else if (!qs.has('still')) {
+    // (a bout nobody's fencing starts again a few seconds after it's over)
+    if (auto && bout.phase === 'over' && bout.t - bout.phaseAt > 4) bout.restart();
     director.base = runner ? runner.pace : 1;
     rate = director.update(wall) * timeScale;
     const dt = wall * rate;

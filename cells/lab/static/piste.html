@@ -85,6 +85,23 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 [hidden]{display:none!important}
 
 body:not(.menu) #menu{display:none}
+/* the menu: calls to action over the bout behind it; a tap on the room hides it to watch */
+.menu #score,.menu #mid,.menu #slow,.menu #rate,.menu #readout{display:none}
+.menu.watching #menu{display:none}
+#watchHint{position:fixed;left:0;right:0;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 10px);text-align:center;font-size:10px;letter-spacing:.3em;text-transform:uppercase;opacity:.6;display:none;pointer-events:none}
+.menu.watching #watchHint{display:block}
+#menu{top:auto;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);background:#14161bd0}
+.ctas{display:flex;flex-direction:column;gap:8px;margin-top:18px}
+.cta{font:inherit;text-align:left;display:flex;flex-direction:column;gap:3px;padding:13px 14px;border-radius:9px;border:1px solid #ffffff2e;background:#ffffff0c;color:var(--ink);text-decoration:none;font-size:15px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer}
+.cta span{font-size:11px;letter-spacing:.04em;text-transform:none;opacity:.6}
+.cta.go{background:var(--ink);color:#14161b;border-color:var(--ink)}.cta.go span{opacity:.7}
+#menu .back{font:inherit;margin-top:10px;background:none;border:0;color:var(--ink);opacity:.7;font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 0;cursor:pointer}
+#menu .foot{margin-top:14px;font-size:10px;letter-spacing:.2em;text-transform:uppercase;opacity:.5}#menu .foot a{color:inherit}
+#mOpts .opt{margin:0 0 12px}#mOpts .opt>span{display:block;font-size:10px;letter-spacing:.24em;text-transform:uppercase;opacity:.6;margin-bottom:6px}
+#mOpts .opt div{display:flex;flex-wrap:wrap;gap:6px}
+#mOpts button{font:inherit;font-size:12px;padding:8px 11px;border-radius:999px;border:1px solid #ffffff30;background:none;color:var(--ink);cursor:pointer;min-height:36px}
+#mOpts button.on{background:var(--ink);color:#14161b;border-color:var(--ink)}
+@media (min-aspect-ratio:1/1) and (max-height:560px){#menu{width:min(620px,calc(100% - 32px));padding:16px 18px 14px}#menu h1{font-size:22px}.ctas{display:grid;grid-template-columns:1fr 1fr;margin-top:12px}.cta{padding:10px 12px;font-size:13px}#mOpts{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}}
 .preview #top,.preview #labels,.preview #mid,.preview #bar,.preview #marks,.preview #hint,.preview #readout{display:none}
 </style></head><body>
 <canvas id="view" aria-label="Looking out through a fencing mask down a piste at an opponent en garde, their épée pointed at you; your own guard and blade low in the view."></canvas>
@@ -102,10 +119,18 @@ body:not(.menu) #menu{display:none}
 <div id="brief" class="card" hidden><h2 id="bTitle"></h2><div id="bText"></div><div class="acts"><button id="bGo" class="go">begin</button><a href="?">lessons</a></div></div>
 <div id="verdict" class="card" hidden><div id="vSay"></div><div id="vDetail"></div><div class="acts"><button id="vNext" class="go">next</button><button id="vAgain">see it again</button></div></div>
 <div id="passed" class="card" hidden><h2>passed</h2><p>Three good repetitions at full speed.</p><div class="acts"><a id="pNext" class="go" href="?">next lesson</a><a id="pAgain" href="?">again</a><a href="?">lessons</a></div></div>
-<div id="menu" class="card"><h1>Piste</h1><div class="lede">a fencing bout through your own mask · épée</div>
-<h3>Learn</h3><div id="mLessons" class="list"></div>
-<h3>Fence</h3><div id="mLevels" class="list"></div>
-<div class="acts"><a href="?auto">watch</a><a href="{{readme}}">notes</a></div></div>
+<div id="menu" class="card"><h1>Piste</h1><div class="lede">fencing through your own mask · épée</div>
+<div id="mHome" class="ctas">
+<button data-go="mLearn" class="cta go">learn<span>the lessons, one at a time</span></button>
+<button data-go="mPractice" class="cta">practice<span>fence a partner at the level you choose</span></button>
+<a id="mChallenge" class="cta" href="?level=0&amp;challenge">challenge<span id="mChallengeSub">beat each level in turn</span></a>
+<button data-go="mSettings" class="cta">settings<span>controls, the camera, the kit, the bout</span></button>
+</div>
+<div id="mLearn" hidden><h3>learn</h3><div id="mLessons" class="list"></div><button class="back">&#8592; back</button></div>
+<div id="mPractice" hidden><h3>practice</h3><div id="mLevels" class="list"></div><button class="back">&#8592; back</button></div>
+<div id="mSettings" hidden><h3>settings</h3><div id="mOpts"></div><button class="back">&#8592; back</button></div>
+<div class="foot">tap the room to watch · <a href="{{readme}}">notes</a></div></div>
+<div id="watchHint">tap for the menu</div>
 <div id="replay"><div id="replayRate"></div><div id="replayNotes"></div><div class="acts"><button id="rAgain">&#8634; again</button><button id="rOn" class="go">go on &#8594;</button></div></div>
 <pre id="readout"></pre>
 <div id="bar"><a href="?">menu</a><a href="{{readme}}">notes</a></div>
