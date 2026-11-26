@@ -41,7 +41,8 @@ const limit = () => {
 for (let round = 1; round <= ROUNDS; round++) {
   const t0 = Date.now();
   G = M.meshJacket(P, B);
-  S = M.settle(G, B.bodyCaps, { seconds: 5, sleeveCaps: B.sleeveCaps });
+  // (long enough to finish: shorter, the solver's unfinished business reads as tightness)
+  S = M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16 });
   const X = (i) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
   const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
   const isSl = (i) => G.pieces.some((pc) => pc.kind === 'sleeve' && i >= pc.base && i < pc.base + pc.rows * pc.cols);

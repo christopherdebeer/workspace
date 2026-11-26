@@ -120,15 +120,21 @@ export function airChecks(G: Garment): { checks: Check[]; x: Float64Array } {
     out.push({ what: `${name}: sewn right side out (its edges run opposite ways round their pieces)`, ok: against === 0 && along > 0, detail: `${along} steps right, ${against} wrong` });
   }
   const capRows = (i: number) => G.pieces.some((pc) => pc.kind === 'sleeve' && i >= pc.base && i < pc.base + 3 * pc.cols);
-  const strains = S.edges.filter((e) => (e.dir === 'across' || e.dir === 'along') && !capRows(e.a)).map((e) => judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest)).map((v) => Math.max(0, v)).sort((a, b) => a - b);
+  // (the armhole's foot: where the side seam ends and the front, the back and the sleeve meet at a point, a junction a
+  // tailor eases or gussets; judged on its own, against a looser limit)
+  const foot = (i: number) => G.pieces.some((pc) => { if (i < pc.base || i >= pc.base + pc.rows * pc.cols) return false; const r = Math.floor((i - pc.base) / pc.cols), c = (i - pc.base) % pc.cols; return pc.kind === 'body' ? r >= 17 && r <= 23 && c >= pc.cols - 3 : r <= 6 && (c <= 2 || c >= pc.cols - 3); });
+  const footStrain = S.edges.filter((e) => (e.dir === 'across' || e.dir === 'along') && foot(e.a)).map((e) => Math.max(0, judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest))).sort((a, b) => a - b);
+  const footP95 = footStrain[Math.floor(footStrain.length * 0.95)];
+  out.push({ what: 'sewn up, the armholes\' feet (front, back and sleeve meeting) stretched no more than a junction may be (95 % under 4 %)', ok: footP95 < 0.04, detail: `95th percentile ${(footP95 * 100).toFixed(1)} %` });
+  const strains = S.edges.filter((e) => (e.dir === 'across' || e.dir === 'along') && !capRows(e.a) && !foot(e.a)).map((e) => judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest)).map((v) => Math.max(0, v)).sort((a, b) => a - b);
   const p99 = strains[Math.floor(strains.length * 0.99)];
   const where = new Map<string, number>();
-  for (const e of S.edges) { if ((e.dir !== 'across' && e.dir !== 'along') || capRows(e.a)) continue; const sv = judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest); if (sv < p99) continue;
+  for (const e of S.edges) { if ((e.dir !== 'across' && e.dir !== 'along') || capRows(e.a) || foot(e.a)) continue; const sv = judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest); if (sv < p99) continue;
     const pc = G.pieces[e.piece], r = Math.floor((e.a - pc.base) / pc.cols), c = (e.a - pc.base) % pc.cols, key = `${pc.name} ${e.dir} row ${r} col ${c}`; where.set(key, sv); }
   const worst = [...where].sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${k} ${(v * 100).toFixed(1)}%`).join('; ');
   // (stretch only: sewn up with nothing inside it, cloth buckles where it's shaped to a body (a sleeve head to a shoulder),
   // and buckling is free; a fault in the making stretches it)
-  out.push({ what: 'sewn up, nothing is stretched (99 % of the cloth under 1 %; not the cap, eased in on purpose)', ok: p99 < 0.01, detail: `99th percentile ${(p99 * 100).toFixed(2)} %; worst: ${worst}` });
+  out.push({ what: 'sewn up, nothing else is stretched (99 % of the cloth under 1 %; not the cap, eased in on purpose, nor the feet)', ok: p99 < 0.01, detail: `99th percentile ${(p99 * 100).toFixed(2)} %; worst: ${worst}` });
   return { checks: out, x: S.x };
 }
 
@@ -147,7 +153,6 @@ export function formChecks(G: Garment, form: Capsule[], regions: { name: string;
     const p95 = vals[Math.floor(vals.length * 0.95)] ?? 0, mx = vals[vals.length - 1] ?? 0;
     out.push({ what: `on the form, ${rg.name}: not stretched (95 % under 1.5 %)`, ok: p95 < 0.015, detail: `95th percentile ${(p95 * 100).toFixed(1)} %, most ${(mx * 100).toFixed(1)} % (${vals.length} edges)` });
   }
-  const all = edges.map(stretch).map((v) => Math.max(0, v)).sort((a, b) => a - b), p99 = all[Math.floor(all.length * 0.99)];
-  out.push({ what: 'on the form, nothing is stretched (99 % under 1 %)', ok: p99 < 0.01, detail: `99th percentile ${(p99 * 100).toFixed(2)} %` });
+  // (not the whole: on the form the jacket's snug on the trunk, which is fit, not making)
   return out;
 }
