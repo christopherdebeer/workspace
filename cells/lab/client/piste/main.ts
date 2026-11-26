@@ -144,18 +144,21 @@ function view(b: Bout): View {
 }
 
 // ─── replays: the touch again, slowly, from the side, with what happened written as it happens ──────────────────────
-let replay: { r: Replay; light: number; marks: NonNullable<View['marks']>; notes: string[]; first: number | null } | null = null;
+let replay: { r: Replay; light: number; marks: NonNullable<View['marks']>; notes: string[]; first: number | null; from: number; to: number; ended: boolean } | null = null;
 let replayedFor = -1;
 const where = (x: number) => (x < 0.34 ? 'forte' : x < 0.67 ? 'middle' : 'foible');
 function startReplay(from: number, to: number, light: number) {
   if (!recorder) return;
-  replay = { r: recorder.replay(Math.max(recorder.earliest, from), to), light, marks: [], notes: [], first: null };
-  body.classList.add('replaying');
+  replay = { r: recorder.replay(Math.max(recorder.earliest, from), to), light, marks: [], notes: [], first: null, from, to, ended: false };
+  body.classList.add('replaying'); body.classList.remove('replayEnded');
   $('replayNotes').textContent = '';
 }
-function endReplay() { replay = null; body.classList.remove('replaying'); }
+function endReplay() { replay = null; body.classList.remove('replaying', 'replayEnded'); }
+/** the same touch again, from the start */
+function againReplay() { if (replay) { const { from, to, light } = replay; startReplay(from, to, light); } }
 function runReplay(wall: number) {
   const R = replay!;
+  if (R.ended) return;
   const ahead = R.light - R.r.t;
   const speed = ahead > 0 ? 0.15 + 0.55 * clamp(ahead / 0.9, 0, 1) : 0.3;
   R.r.run(wall * speed);
@@ -172,7 +175,8 @@ function runReplay(wall: number) {
   }
   $('replayNotes').textContent = R.notes.slice(-4).join('\n');
   $('replayRate').textContent = `replay · ${speed.toFixed(2)}×`;
-  if (R.r.done) endReplay();
+  // (at its end it waits, the last moment held, to be seen again or gone on from; a bout with nobody watching goes on)
+  if (R.r.done && !R.ended) { R.ended = true; if (auto) endReplay(); else { body.classList.add('replayEnded'); $('replayRate').textContent = 'replay · held'; } }
 }
 function replayView(b: Bout): View {
   // (the action is between the guards; a wide screen sees it from the side, both fencers fitted in; a tall one from
@@ -187,6 +191,8 @@ function replayView(b: Bout): View {
   return { eye: [eye[0], eye[1] + 1.5, eye[2]], at, fov: 0.95, self: -1, marks: replay?.marks };
 }
 $('replay').addEventListener('pointerdown', (e) => { e.stopPropagation(); endReplay(); });
+$('rAgain').addEventListener('pointerdown', (e) => { e.stopPropagation(); againReplay(); });
+$('rOn').addEventListener('pointerdown', (e) => { e.stopPropagation(); endReplay(); });
 
 // ─── the lamps, the score, the words ────────────────────────────────────────────────────────────────────────────────
 const lamp = (who: 0 | 1, l: Light | null) => {
