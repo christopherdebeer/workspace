@@ -32,7 +32,7 @@ import { tailor } from './tailor';
 
 /** the cloth's dials: substep length (s), passes a substep, stiffnesses (0..1 a pass), relaxation, damping, and how
  * much of the body's motion the cloth is dragged toward each substep */
-export const CLOTH = { step: 1 / 480, maxSteps: 14, passes: 3, stretch: 1, shear: 0.6, bend: 0.5, omega: 1.4, damp: 0.995, drag: 0.04,
+export const CLOTH = { step: 1 / 480, maxSteps: 10, passes: 3, stretch: 1, shear: 0.6, bend: 0.5, omega: 1.4, damp: 0.995, drag: 0.04,
   /** thickness: how hard each pass pulls a point's curvature (its offset from its four neighbours' middle) toward the
    * skin's under it (a scale on each piece's own, `thickness`). Thick cloth can't crease in short waves; it folds in
    * broad ones */
@@ -99,41 +99,43 @@ void main(){
   v = mix(v, va, drag) * damp;
   oX = vec4(x + v + vec3(0.0, -9.81, 0.0) * h * h, 1.0); oP = vec4(x, 1.0);
 }`;
-/** a pass of the constraints, each point from its neighbours (Jacobi), then the body's: ease and backstop */
+/** a pass of the constraints, each point from its neighbours (Jacobi), then the body's: ease and backstop. Written
+ * out straight, with no small arrays indexed in a loop: on phone GPUs those spill out of registers and cost several
+ * times the whole pass (the first version ran at an eighth of this speed on an iPhone) */
 const SOLVE_FS = HEAD + `
 uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
 /** the arms (upper and fore, each side: a, b, radius), for the jacket's body to lie against */
 uniform vec4 armA[4], armB[4];
 out vec4 o;
-const ivec2 OFF[12] = ivec2[12](ivec2(1,0), ivec2(-1,0), ivec2(0,1), ivec2(0,-1), ivec2(1,1), ivec2(1,-1), ivec2(-1,1), ivec2(-1,-1), ivec2(2,0), ivec2(-2,0), ivec2(0,2), ivec2(0,-2));
+int r, c, R, S, off; vec3 x, acc; float n;
+vec3 at(int rr, int cc){ return texelFetch(X, tc(off + rr * S + (cc + S) % S), 0).xyz; }
+vec3 anchorAt(int rr, int cc){ ivec2 t = tc(off + rr * S + (cc + S) % S); return mix(texelFetch(A0, t, 0).xyz, texelFetch(A1, t, 0).xyz, s); }
+void pull(vec3 xj, float L, float k){ if (L <= 0.0) return; vec3 d = x - xj; float l = length(d); if (l < 1e-7) return; acc -= 0.5 * k * (l - L) * d / l; n += 1.0; }
+void rel(int dr, int dc, float L, float k){ int rr = r + dr; if (rr < 0 || rr >= R || L <= 0.0) return; pull(at(rr, c + dc), L, k); }
 void main(){
   int i = me(); if (i >= N) { o = vec4(0); return; }
   vec4 ma = texelFetch(MetaA, tc(i), 0), mb = texelFetch(MetaB, tc(i), 0);
-  int r = int(ma.x), c = int(ma.y), R = int(ma.z), S = int(ma.w), off = int(mb.x);
-  vec3 x = texelFetch(X, tc(i), 0).xyz, acc = vec3(0.0); float n = 0.0;
-  vec4 rest[3] = vec4[3](texelFetch(Rest0, tc(i), 0), texelFetch(Rest1, tc(i), 0), texelFetch(Rest2, tc(i), 0));
-  vec3 a = mix(texelFetch(A0, tc(i), 0).xyz, texelFetch(A1, tc(i), 0).xyz, s);
-  vec3 midX = vec3(0.0), midA = vec3(0.0); float m4 = 0.0;
-  vec3 nx[4], na[4];
-  for (int k = 0; k < 12; k++) {
-    int rr = r + OFF[k].x; if (rr < 0 || rr >= R) continue;
-    int cc = (c + OFF[k].y + S) % S, j = off + rr * S + cc;
-    vec3 xj = texelFetch(X, tc(j), 0).xyz;
-    vec3 d = x - xj; float l = length(d); if (l < 1e-7) continue;
-    float kk = k < 4 ? kStretch : (k < 8 ? kShear : kBend);
-    // (the rest length: the pattern's, on the flat paper)
-    float L = rest[k / 4][k % 4]; if (L <= 0.0) continue;
-    acc -= 0.5 * kk * (l - L) * d / l; n += 1.0;
-    if (k < 4) { vec3 aj = mix(texelFetch(A0, tc(j), 0).xyz, texelFetch(A1, tc(j), 0).xyz, s); midX += xj; midA += aj; m4 += 1.0; nx[k] = xj; na[k] = aj; }
-  }
+  r = int(ma.x); c = int(ma.y); R = int(ma.z); S = int(ma.w); off = int(mb.x);
+  x = texelFetch(X, tc(i), 0).xyz; acc = vec3(0.0); n = 0.0;
+  // (the rest lengths, the pattern's: along up and down, round right and left; the diagonals; two along, two round)
+  vec4 q0 = texelFetch(Rest0, tc(i), 0), q1 = texelFetch(Rest1, tc(i), 0), q2 = texelFetch(Rest2, tc(i), 0);
+  bool up = r + 1 < R, down = r > 0;
+  vec3 xU = at(up ? r + 1 : r, c), xD = at(down ? r - 1 : r, c), xR = at(r, c + 1), xL = at(r, c - 1);
+  if (up) pull(xU, q0.x, kStretch);
+  if (down) pull(xD, q0.y, kStretch);
+  pull(xR, q0.z, kStretch); pull(xL, q0.w, kStretch);
+  rel(1, 1, q1.x, kShear); rel(1, -1, q1.y, kShear); rel(-1, 1, q1.z, kShear); rel(-1, -1, q1.w, kShear);
+  rel(2, 0, q2.x, kBend); rel(-2, 0, q2.y, kBend); rel(0, 2, q2.z, kBend); rel(0, -2, q2.w, kBend);
   x += omega * acc / max(n, 1.0);
-  // thickness: the point's offset from its neighbours' middle eased toward the skin's offset there
-  if (m4 > 3.5) {
-    vec3 sheet = midX / m4 + (a - midA / m4);
+  vec3 a = mix(texelFetch(A0, tc(i), 0).xyz, texelFetch(A1, tc(i), 0).xyz, s);
+  if (up && down) {
+    vec3 aU = anchorAt(r + 1, c), aD = anchorAt(r - 1, c), aR = anchorAt(r, c + 1), aL = anchorAt(r, c - 1);
+    // thickness: the point's offset from its neighbours' middle eased toward the skin's offset there
+    vec3 sheet = 0.25 * (xU + xD + xR + xL) + a - 0.25 * (aU + aD + aR + aL);
     x += min(1.0, kThick * abs(mb.y)) * (sheet - x);
     // folded over: where the cloth's surface here has turned inside out against the skin's (its grid's normal against
     // the skin grid's), it's crossed itself; pull it back toward a smooth sheet
-    vec3 m = cross(nx[0] - nx[1], nx[2] - nx[3]), mA = cross(na[0] - na[1], na[2] - na[3]);
+    vec3 m = cross(xU - xD, xR - xL), mA = cross(aU - aD, aR - aL);
     float agree = dot(m, mA) / max(1e-12, length(m) * length(mA));
     if (agree < 0.3) x = mix(x, sheet, kUnfold * clamp((0.3 - agree) / 0.6, 0.0, 1.0));
   }
@@ -142,12 +144,11 @@ void main(){
   float slack = mb.w;
   // the jacket's body lies against the arms (not where an arm and the body meet: the armpit, where the skin under it
   // is already inside the arm)
-  if (mb.y > 0.0 && slack > 0.004) for (int q = 0; q < 4; q++) {
-    vec3 ab = armB[q].xyz - armA[q].xyz; float rq = armA[q].w + 0.008;
-    vec3 ca = armA[q].xyz + ab * clamp(dot(a - armA[q].xyz, ab) / max(1e-9, dot(ab, ab)), 0.0, 1.0);
+  if (mb.y > 0.0 && slack > 0.004) for (int k = 0; k < 4; k++) {
+    vec3 A = armA[k].xyz, ab = armB[k].xyz - A; float rq = armA[k].w + 0.008, ab2 = max(1e-9, dot(ab, ab));
+    vec3 ca = A + ab * clamp(dot(a - A, ab) / ab2, 0.0, 1.0);
     if (length(a - ca) < rq) continue;
-    vec3 cx = armA[q].xyz + ab * clamp(dot(x - armA[q].xyz, ab) / max(1e-9, dot(ab, ab)), 0.0, 1.0);
-    vec3 dq = x - cx; float lq = length(dq);
+    vec3 cx = A + ab * clamp(dot(x - A, ab) / ab2, 0.0, 1.0), dq = x - cx; float lq = length(dq);
     if (lq < rq && lq > 1e-6) x = cx + dq * (rq / lq);
   }
   if (slack < 0.0005) x = a;
