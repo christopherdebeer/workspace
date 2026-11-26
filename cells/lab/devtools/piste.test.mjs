@@ -381,6 +381,22 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   c.ok('warm-up: begun, you stay where you took up your guard, they salute, allez (within 5 s)', allez !== null && allez < 5 && Math.abs(me.s - (s0 + moved)) < 0.03, { allez, s: me.s, at: s0 + moved });
 }
 
+// between touches, with a player: back to the warm-up (you free, not moved), they walk back to their line
+{
+  const b = new Bout({ weapon: EPEE, to: 5, ceremony: true, warmup: true, seed: 5 }), ai = [new Opponent(b, 0, SPARRING, 21), new Opponent(b, 1, SPARRING, 22)];
+  const [me, op] = b.fencers;
+  let halted = false, back = null, mine = null, phaseAfter = null;
+  for (let s = 0; s < 80 && back === null; s += DT) {
+    if (b.phase === 'warmup' && !halted) b.begin();
+    for (const k of [0, 1]) b.fencers[k].intent = b.phase === 'fence' ? { ...ai[k].intent(DT) } : idle();
+    b.advance(DT);
+    for (const e of b.drain()) if (e.type === 'halt') { halted = true; mine = null; }
+    if (halted && b.phase === 'warmup') { phaseAfter ??= 'warmup'; mine ??= me.s; if (Math.abs(op.s - PISTE.garde) < 0.03) back = s; }
+    if (halted && b.phase === 'interlude') phaseAfter ??= 'interlude';
+  }
+  c.ok('between touches (a player): back to the warm-up, they walk to their line, you aren\'t moved', phaseAfter === 'warmup' && back !== null && Math.abs(me.s - mine) < 0.03, { phaseAfter, back, me: me.s, mine });
+}
+
 // two stand-ins fence a bout to five
 {
   const b = new Bout({ weapon: EPEE, to: 5 }), ai = [new Opponent(b, 0, SPARRING, 3), new Opponent(b, 1, SPARRING, 4)];

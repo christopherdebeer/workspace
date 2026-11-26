@@ -161,7 +161,8 @@ function startReplay(from: number, to: number, light: number) {
   body.classList.add('replaying'); body.classList.remove('replayEnded');
   $('replayNotes').textContent = '';
 }
-function endReplay() { replay = null; body.classList.remove('replaying', 'replayEnded'); }
+// (gone on from: the touch is called at once, and the next begins from here, with no more of the halt's pause)
+function endReplay() { replay = null; body.classList.remove('replaying', 'replayEnded'); bout.hurry(); }
 /** the same touch again, from the start */
 function againReplay() { if (replay) { const { from, to, light } = replay; startReplay(from, to, light); } }
 function runReplay(wall: number) {
@@ -211,7 +212,7 @@ function say(big: string, small: string) { $('say').textContent = big; $('sub').
 function hear(events: BoutEvent[]) {
   for (const e of events) {
     if (e.type === 'light') { if (e.who === 1) navigator.vibrate?.(60); }
-    else if (e.type === 'halt' && mode === 'bout') say(e.call || 'halt', `${e.points[0] || e.points[1] ? 'point' : 'no point'}`);
+    else if (e.type === 'halt' && mode === 'bout') { say(e.call || 'halt', `${e.points[0] || e.points[1] ? 'point' : 'no point'}`); calledAt = performance.now(); }
     else if (e.type === 'reset' && mode === 'bout' && bout.phase === 'ready') say('en garde', '');
     else if (e.type === 'allez' && mode === 'bout') { say('allez', ''); setTimeout(() => { if ($('say').textContent === 'allez') say('', ''); }, 700); }
     else if (e.type === 'over') {
@@ -365,7 +366,7 @@ recorder?.reset();
 // ─── the warm-up: free until the right thumb comes to rest for a few seconds, where you are then being your guard;
 // the count over their salute, then allez ──────────────────────────────────────────────────────────────────────────
 const HOLD = 3, STILL = 0.08;
-let holdT = 0, holdAt: [number, number] | null = null, said = '';
+let holdT = 0, holdAt: [number, number] | null = null, said = '', calledAt = -1e9;
 function warmup(real: number) {
   if (bout.phase === 'warmup') {
     const h = thumbs.hold();
@@ -381,7 +382,9 @@ function warmup(real: number) {
   let w = '';
   if (bout.phase === 'warmup') w = holdT > 0.25 ? 'warm up|hold still: en garde' : 'warm up|rest the right thumb to begin';
   else if (bout.phase === 'prelude') { const cd = bout.ceremony.countdown(); w = cd !== null && cd > 0 ? `${Math.ceil(Math.min(3, cd))}|` : '|'; }
-  if (w !== said) { if (w || said) { const [a, b2] = w.split('|'); say(a ?? '', b2 ?? ''); } said = w; }
+  // (what's shown is redrawn when it isn't what should be: the referee's call is left up a moment first)
+  const shown = `${$('say').textContent}|${$('sub').textContent}`;
+  if ((w !== said || (w && shown !== w)) && performance.now() - calledAt > 1500) { if (w || said) { const [a, b2] = w.split('|'); say(a ?? '', b2 ?? ''); } said = w; }
 }
 
 let last = performance.now(), rate = 1;

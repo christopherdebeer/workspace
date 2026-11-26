@@ -153,8 +153,16 @@ export class Bout {
     if (!this.rites) return;
     if (this.opts.warmup) { this.go('warmup'); this.ceremony.begin('warmup'); } else { this.go('prelude'); this.ceremony.begin('prelude'); }
   }
-  /** from the warm-up, begin: you're on guard where you are; they salute on their line; en garde */
-  begin() { if (this.phase === 'warmup') { this.go('prelude'); this.ceremony.begin('prelude', 0, { loosen: false, youStay: true }); } }
+  /** from the warm-up (before the bout, or between touches), begin: you're on guard where you are; they salute on
+   * their line (before the first touch) or come on guard; en garde */
+  begin() {
+    if (this.phase !== 'warmup') return;
+    this.go('prelude'); this.ceremony.begin('prelude', 0, { loosen: false, youStay: true, salute: !this.opened });
+  }
+  /** whether the bout has had its first allez (the salute is before it) */
+  private opened = false;
+  /** the touch has been seen (a replay of it ended): call it now, without the rest of the halt's pause */
+  hurry() { if (this.phase === 'halt' && this.box.locked(this.t)) this.phaseAt = Math.min(this.phaseAt, this.t - 1.4); }
 
   /** whether there's a ceremony: a referee'd bout that asked for one */
   private get rites() { return !!this.opts.ceremony && this.opts.referee !== false; }
@@ -166,7 +174,7 @@ export class Bout {
     // (the ceremony runs the bodies before the bout, between touches and after; done, they're on guard on their lines)
     if (this.ceremony.rite) { const stay = this.ceremony.stays; if (this.ceremony.update(H, this.fencers, this.lines) && (this.phase === 'prelude' || this.phase === 'interlude')) this.settle(stay); }
     const since = this.t - this.phaseAt;
-    if (this.phase === 'ready' && since > 0.9) this.go('fence', () => this.events.push({ type: 'allez', t: this.t }));
+    if (this.phase === 'ready' && since > 0.9) { this.opened = true; this.go('fence', () => this.events.push({ type: 'allez', t: this.t })); }
     if (this.phase === 'fence') {
       this.clock -= H;
       if (this.clock <= 0 && this.box.first === null) { this.clock = 0; this.timeUp = true; this.call = 'time'; this.events.push({ type: 'time', t: this.t }); this.go('halt'); return; }
@@ -204,6 +212,8 @@ export class Bout {
         this.events.push({ type: 'priority', t: this.t, who: this.priority });
       }
       if (winner !== null) { this.go('over'); this.events.push({ type: 'over', t: this.t, winner }); if (this.rites) this.ceremony.begin('over'); }
+      // (a player takes up their guard again themselves, as in the warm-up; a bout nobody's fencing walks both back)
+      else if (this.rites && this.opts.warmup) { this.box.reset(); this.call = ''; this.go('warmup'); this.ceremony.begin('between', this.score[0] + this.score[1]); }
       else if (this.rites) { this.go('interlude'); this.ceremony.begin('interlude', this.score[0] + this.score[1]); }
       else this.enGarde();
     }
@@ -244,6 +254,7 @@ export class Bout {
     this.events.push({ type: 'reset', t: this.t });
   }
   restart() {
+    this.opened = false;
     this.score = [0, 0]; this.clock = this.opts.time ?? 180; this.priority = null; this.timeUp = false; this.enGarde();
     this.opening();
   }

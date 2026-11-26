@@ -4,7 +4,9 @@
  * - Warming up (a bout with a player, before it starts): you're free; the opponent loosens up on its line.
  * - Before: back to their lines (a player who's been warming up may be anywhere), they salute each other (a countdown
  *   runs over the salute) and come on guard for "en garde". Without a warm-up they loosen first.
- * - Between touches, instead of being put back on their lines: out of the lunge, up out of guard, the point lowered;
+ * - Between touches, in a bout with a player: you're free again, as in the warm-up (resting the right thumb begins the
+ *   next); the opponent walks back to its line (turning its back if it's far) and loosens there.
+ * - Between touches, in a bout nobody's fencing, instead of being put back on their lines: out of the lunge, up out of guard, the point lowered;
  *   back to the line (the opponent turns and walks; you step back facing them, so your view stays on them), shaking
  *   the arm out on the way, a moment on the line, and back on guard.
  * - After: they stand, lower their weapons and salute.
@@ -14,7 +16,7 @@
  */
 import type { Fencer, Scene } from './fencer';
 
-export type Rite = 'warmup' | 'prelude' | 'interlude' | 'over';
+export type Rite = 'warmup' | 'between' | 'prelude' | 'interlude' | 'over';
 
 /** the timings, s */
 export const RITE = { up: 0.5, onLine: 0.45, guard: 0.7, loosen: 1.4, salute: 2.3, overWait: 1.2 };
@@ -32,11 +34,13 @@ export class Ceremony {
   private loosen = true; private saluteAt = -1;
   /** the prelude after a warm-up: you've taken up your guard where you are; only the opponent makes ready */
   private youStay = false;
+  /** whether the prelude's countdown is over their salute (before the first touch) or just their coming on guard */
+  private salute = true;
 
   constructor(seed = 1) { this.seed = seed; }
 
-  begin(rite: Rite, n = 0, o: { loosen?: boolean; youStay?: boolean } = {}) {
-    this.rite = rite; this.t = 0; this.arrived = [-1, -1]; this.guardAt = -1; this.saluteAt = -1; this.loosen = o.loosen ?? true; this.youStay = !!o.youStay;
+  begin(rite: Rite, n = 0, o: { loosen?: boolean; youStay?: boolean; salute?: boolean } = {}) {
+    this.rite = rite; this.t = 0; this.arrived = [-1, -1]; this.guardAt = -1; this.saluteAt = -1; this.loosen = o.loosen ?? true; this.youStay = !!o.youStay; this.salute = o.salute ?? true;
     // (who shakes their arm out on the way back, and when: a little different each time)
     const r = (k: number) => { const x = Math.sin((this.seed + n * 7.31 + k * 3.7) * 12.9898) * 43758.5453; return x - Math.floor(x); };
     this.shakeAt = [r(1) < 0.6 ? 0.6 + 0.8 * r(2) : -1, r(3) < 0.7 ? 0.5 + 0.9 * r(4) : -1];
@@ -55,6 +59,15 @@ export class Ceremony {
       fencers[1].scene = { stand: 1, walkTo: lines[1], turn: 0, arm: c > 1 && c < 2.3 ? 'shake' : 'down', armT: c - 1 };
       return false;
     }
+    if (this.rite === 'between') {
+      // you're free; they walk back to their line (their back turned if it's far), and loosen there
+      fencers[0].scene = null;
+      const f = fencers[1], away = Math.abs(f.s - lines[1]);
+      if (away < 0.03 && this.arrived[1] < 0) this.arrived[1] = t;
+      const walking = t > RITE.up && this.arrived[1] < 0, c = this.arrived[1] < 0 ? 0 : (t - this.arrived[1]) % 4.2;
+      f.scene = { stand: 1, walkTo: t > RITE.up ? lines[1] : null, turn: walking && away > 0.9 ? Math.PI : 0, arm: c > 1 && c < 2.3 ? 'shake' : 'down', armT: c - 1 };
+      return false;
+    }
     if (this.rite === 'prelude') {
       // (loosen, if there was no warm-up; back to the lines; salute; on guard)
       fencers.forEach((f, i) => { if ((Math.abs(f.s - lines[i]) < 0.03 || (i === 0 && this.youStay)) && this.arrived[i] < 0) this.arrived[i] = t; });
@@ -65,7 +78,8 @@ export class Ceremony {
         // (you, after a warm-up, are already on guard where you came to rest: left to yourself)
         if (i === 0 && this.youStay) { f.scene = null; return; }
         const shake = i === 0 ? 0.15 : 0.45;
-        const arm: Scene['arm'] = salute < 0 ? (this.loosen && t > shake && t < shake + 1.3 ? 'shake' : 'down') : t < guard ? 'salute' : 'guard';
+        // (the countdown: over their salute before the first touch; after it, just their coming back on guard)
+        const arm: Scene['arm'] = salute < 0 ? (this.loosen && t > shake && t < shake + 1.3 ? 'shake' : 'down') : t < guard ? (this.salute ? 'salute' : 'down') : 'guard';
         const armT = arm === 'shake' ? t - shake : arm === 'salute' ? t - salute : 0;
         f.scene = { stand: t < guard ? 1 : 0, walkTo: lines[i], turn: 0, arm, armT };
       });
