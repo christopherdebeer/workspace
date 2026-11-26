@@ -76,6 +76,9 @@ const mine = (c: Ctx) => c.lights[0]?.valid ? c.lights[0] : null;
 /** how high on the chest the coach's attacks come in the high-line parry lessons (above the middle: a high line), m */
 const PARRY_HIGH = 0.08;
 /** the distance the parry lessons start from: the coach's arm reaches you from here without a lunge, m */
+/** every lesson's distance, measured for an athlete whose straight arm puts the guard 0.635 m from the shoulder; `reach`
+ * is what's added for this athlete's longer arm (fencer.ts: an adult's arm, and shoulders set where an adult's are) */
+export const DISTANCE: { reach: number; byLesson: Record<string, number> } = { reach: 0.1, byLesson: {} };
 const PARRY_GAP = 1.1;
 /** how fast the coach's arm goes out in the parry lessons (per second) */
 const PARRY_TEMPO = 2;
@@ -517,7 +520,7 @@ export class LessonRunner {
 
   private set() {
     this.stage = 'set'; this.at = 0;
-    this.bout.place(this.lesson.gap);
+    this.bout.place(this.lesson.gap + (DISTANCE.byLesson[this.lesson.id] ?? DISTANCE.reach));
     this.coach.rest();
     const [student, them] = this.bout.fencers;
     this.c = { bout: this.bout, coach: this.coach, student, them, since: 0, rnd: this.rnd, rep: {}, lights: [null, null],

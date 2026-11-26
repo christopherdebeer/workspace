@@ -7,6 +7,7 @@ import { checks } from './harness.mjs';
 const lab = new URL('../client/piste/', import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './box'; export * from './intent'; export * from './v3'; export * from './blade'; export * from './contact'; export * from './lessons'; export * from './replay'; export * from './time'; export * from './fencer'; export * from './ai'; export { GAIN } from './input';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const { REACH_GAIN, GUARD_GAIN } = M;
 const { Bout, EPEE, FOIL, Opponent, SPARRING, LEVELS, Box, award, idle, LESSONS, LessonRunner, Recorder, cloneBout, TimeDirector, aimAt, add, lerp, reachFor, openTarget, TARGETS, toLocal, norm, sub, FATIGUE, Dummy } = M;
 const c = checks();
 const DT = 1 / 60;
@@ -53,7 +54,7 @@ function at(b, gap) {
 const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } : idle());
 {
   const b = new Bout({ weapon: EPEE, to: 5 });
-  at(b, 1.15);
+  at(b, 1.15 + REACH_GAIN);
   let bow = 0;
   const ev = [];
   for (let s = 0; s < 1.2; s += DT) {
@@ -78,7 +79,7 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
 // a light touch doesn't close the tip: arm extended slowly onto the chest without a lunge, from just in reach
 {
   const b = new Bout({ weapon: EPEE, to: 5 });
-  at(b, 1.0);
+  at(b, 1.0 + REACH_GAIN);
   b.fencers[0].blade.muscle.fGuard = 3; b.fencers[0].blade.muscle.fPommel = 2;
   const ev = run(b, 1.5, (k) => (k === 0 ? { ...idle(), extend: 1 } : idle()));
   c.ok('a hand too weak to press 750 g home lights nothing', !ev.some((e) => e.type === 'light' && e.who === 0), b.peak);
@@ -88,7 +89,7 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
 {
   const b = new Bout({ weapon: EPEE, to: 5 });
   // (far enough that the blades cross at their middles, not on a guard)
-  at(b, 1.85);
+  at(b, 1.85 + 2 * (GUARD_GAIN + 0.6 * (REACH_GAIN - GUARD_GAIN)));
   const [A, B] = b.fencers;
   run(b, 0.6, () => ({ ...idle(), extend: 0.6 }));
   const tip0 = B.blade.tip;
@@ -181,7 +182,7 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
 // it doesn't linger
 {
   const b = new Bout({ weapon: EPEE, to: 5 });
-  at(b, 1.3);
+  at(b, 1.3 + REACH_GAIN);
   const td = new TimeDirector(b, 1), off = new TimeDirector(b, 0);
   let calm = 1, slowest = 1, never = 1;
   for (let s = 0; s < 0.5; s += DT) { b.fencers[1].intent = idle(); b.advance(DT); calm = Math.min(calm, td.update(DT)); }

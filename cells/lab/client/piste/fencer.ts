@@ -22,9 +22,24 @@ export const BODY = {
   lungeHips: 0.46,      // how far the pelvis goes forward in it
   step: 0.36,           // an advance or a retreat
   stepTime: 0.3, lungeTime: 0.26, recoverTime: 0.36,
-  upperArm: 0.3, forearm: 0.28, gripToGuard: 0.06,
+  // (the arm: shoulder to elbow, elbow to the middle of the grip, and the rear arm's elbow to wrist: an adult's of this
+  // height, measured by devtools/piste-proportions.mjs)
+  upperArm: 0.33, forearm: 0.32, gripToGuard: 0.06, rearForearm: 0.26,
+  /** each shoulder joint's distance out from the trunk's axis, along the shoulders' line */
+  shoulderOut: 0.175,
   eye: 0.7,             // eye above the pelvis
 };
+
+/** how far the guard can be from the shoulder: the arm straight, to the guard */
+const ARM = BODY.upperArm + BODY.forearm + BODY.gripToGuard - 0.005;
+/** the shoulders' line (forward, right), side on: rear shoulder to weapon shoulder */
+const SHOULDER_LINE = [0.931, 0.364] as const;
+
+/** how much further this athlete reaches than the one the bout's distances were first measured for (whose straight arm
+ * put the guard 0.635 m from a shoulder 0.13 m forward of the trunk's axis): the straight arm's guard, and the bent
+ * one's (m, along the piste). Distances that were tuned for that athlete add these */
+export const REACH_GAIN = (0.04 + SHOULDER_LINE[0] * BODY.shoulderOut + 0.59 * ARM / 0.635) - (0.13 + 0.59);
+export const GUARD_GAIN = (0.04 + SHOULDER_LINE[0] * BODY.shoulderOut) - 0.13;
 
 /** the trunk's section, side on: half its depth across the piste, and how far its width runs past that fore and aft, m */
 export const TRUNK = { depth: 0.115, wide: 0.045 };
@@ -146,9 +161,12 @@ export class Fencer {
     const pelvis = toWorld(F, pF, pU, 0);
     const chest = at(0.04, 0, 0, 0.42);
     const neck = at(0.05, 0, 0, 0.52);
-    this.shoulder = at(0.13, 0, 0.05, 0.47);
-    this.anchor = toWorld(F, hipsFwd + 0.13 + sl * 0.47, hipsUp + cl * 0.47, 0.05);
-    const rearShoulder = at(-0.1 - K.profile, 0, -0.04, 0.47);
+    // (the shoulders: either side of the trunk's axis along the shoulders' line, side on: the weapon shoulder leads,
+    // toward the right)
+    const SO = BODY.shoulderOut, sx = SHOULDER_LINE[0] * SO, sz = SHOULDER_LINE[1] * SO;
+    this.shoulder = at(0.04 + sx, 0, sz, 0.47);
+    this.anchor = toWorld(F, hipsFwd + 0.04 + sx + sl * 0.47, hipsUp + cl * 0.47, sz);
+    const rearShoulder = at(0.04 - sx - K.profile, 0, -sz, 0.47);
     const head = madd(madd(at(0.07, 0, -0.01, 0.7), f, K.head[0]), u, K.head[1]);
     this.eye = madd(madd(at(0.13, 0, -0.005, BODY.eye), f, K.eye[0]), u, K.eye[1]);
     // legs: hips to knees (bent, out) to feet
@@ -167,8 +185,10 @@ export class Fencer {
     // and straightens, for balance. It's posed for the motion's lunge (thrown ahead of the feet, overshooting), turned
     // back with the shoulder, and its hand swings
     const Lr = K.rearLunge, [swF, swU] = K.rearSwing;
-    const rearElbow = toWorld(F, pF - 0.12 - 0.12 * Lr - K.profile + 0.5 * tF + 0.45 * swF, pU + 0.26 - 0.06 * Lr + 0.45 * swU, -0.2);
-    const rearHand = toWorld(F, pF - 0.04 - 0.4 * Lr - K.profile + 0.3 * tF + swF, pU + 0.03 + 0.02 * Lr + swU, -0.24);
+    // (its wrist hangs by the thigh, a little behind it, and the elbow is found for the arm's lengths, bending back and
+    // out as a relaxed arm's does)
+    const rearHand = toWorld(F, pF - 0.06 - 0.4 * Lr - K.profile + 0.3 * tF + swF, pU - 0.03 + 0.06 * Lr + swU, -0.25);
+    const rearElbow = knee(rearShoulder, rearHand, BODY.upperArm, BODY.rearForearm, add(scale(f, -1), scale(r, -0.5)));
     this.capsules = [
       // (the trunk is an oval, wide along the piste and thin across it, side on: this, the core, is as thin as it is
       // across; two more at the end of the list widen it fore and aft. Fitted to the dressed figure: devtools/piste-fit.mjs)
@@ -212,9 +232,12 @@ export class Fencer {
   /** where the guard is sent at extension `e` with the hand moved (hx right, hy up), within the arm's reach */
   guardFor(e: number, hx: number, hy: number): V {
     const F = this.frame, S = this.anchor, toS = (a: number, b: number, c: number) => add(S, dirWorld(F, a, b, c));
-    let G = toS(0.36 + 0.23 * e, -0.2 + 0.16 * e, 0.12 - 0.11 * e);
+    // (bent, the guard where any arm holds it, a little forward of and below the shoulder (a longer arm is just more
+    // bent); straight, along the arm as far as this one reaches)
+    const k = ARM / 0.635, mix = (a: number, b: number) => a + (b - a) * e;
+    let G = toS(mix(0.36, 0.59 * k), mix(-0.2, -0.04 * k), mix(0.12, 0.01 * k));
     G = add(G, add(scale(F.r, hx), scale(F.u, hy)));
-    const reach = BODY.upperArm + BODY.forearm + BODY.gripToGuard - 0.005, d = sub(G, S), l = len(d);
+    const reach = ARM, d = sub(G, S), l = len(d);
     if (l > reach) G = madd(S, d, reach / l - 1);
     return G;
   }
@@ -284,8 +307,10 @@ export function aimAt(f: Fencer, p: V, e: number, extraHand: [number, number] = 
  */
 export function reachFor(f: Fencer, p: V): number {
   const need = len(sub(p, f.anchor)) - f.weapon.blade * 0.985 + 0.025;
-  // (the guard's distance from the shoulder runs from about 0.43 m bent to 0.6 m straight: see guardFor)
-  return (need - 0.43) / 0.17;
+  // (the guard's distance from the shoulder runs from about 0.43 m bent to 0.6 m straight for an arm that reaches 0.635 m,
+  // the straight end in proportion for a longer one: see guardFor)
+  const k = ARM / 0.635;
+  return (need - 0.43) / (0.6 * k - 0.43);
 }
 const toLocalDir = (F: Frame, d: V): V => [dot(d, F.f), dot(d, F.u), dot(d, F.r)];
 

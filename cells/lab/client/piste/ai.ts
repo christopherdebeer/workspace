@@ -18,7 +18,7 @@
 import type { Bout } from './bout';
 import type { Controller, Intent } from './intent';
 import { idle } from './intent';
-import { type Fencer, aimAt, reachFor } from './fencer';
+import { type Fencer, aimAt, reachFor, REACH_GAIN } from './fencer';
 import { seeded, type Rand } from '../kit/rng';
 import { type V, add, dot, lerp, madd, norm, sub, toLocal } from './v3';
 
@@ -91,7 +91,8 @@ export class Opponent implements Controller {
 
   constructor(readonly bout: Bout, readonly me: 0 | 1, readonly style: Style = SPARRING, seed = 1) {
     this.rnd = seeded(seed * 7919 + me);
-    this.want = style.measure;
+    // (the style's distances were measured for an athlete with a shorter reach: fencer.ts)
+    this.want = style.measure + REACH_GAIN;
   }
 
   private get self(): Fencer { return this.bout.fencers[this.me]; }
@@ -133,17 +134,17 @@ export class Opponent implements Controller {
           if (see.dChest < 0.62) { if (canStep) step('retreat'); break; }
           if (this.lineFor > 0.25) { const a = this.answer(see); if (a) { this.begin(a); if (a === 'beat' || a === 'take') this.side = this.sideOf(lerp(o.blade.guard, o.blade.tip, 0.75)); break; } }
           // (in its own time, closer, if a step wouldn't put it on their point)
-          if (canStep && see.dChest > 1.05 && see.gap > 1.7) step('advance');
+          if (canStep && see.dChest > 1.05 && see.gap > 1.7 + REACH_GAIN) step('advance');
           break;
         }
         // keep the distance it likes (and change its mind about it now and then)
-        if (this.rnd() < dt * 0.4) this.want = this.style.measure + (this.rnd() - 0.5) * 0.5;
+        if (this.rnd() < dt * 0.4) this.want = this.style.measure + REACH_GAIN + (this.rnd() - 0.5) * 0.5;
         if (canStep) {
           if (see.gap < this.want - 0.2) step('retreat');
           else if (see.gap > this.want + 0.25) step('advance');
         }
-        if (see.gap < 1.55 && this.rnd() < dt * this.style.aggression * 3) { this.aimAt = see.gap < 1.1 && this.rnd() < 0.5 ? 'arm' : 'torso'; this.begin('attack'); }
-        else if (see.gap < 2.05 && this.rnd() < dt * this.style.aggression) {
+        if (see.gap < 1.55 + REACH_GAIN && this.rnd() < dt * this.style.aggression * 3) { this.aimAt = see.gap < 1.1 + REACH_GAIN && this.rnd() < 0.5 ? 'arm' : 'torso'; this.begin('attack'); }
+        else if (see.gap < 2.05 + REACH_GAIN && this.rnd() < dt * this.style.aggression) {
           // (if they stop-hit its advances, the step is a lure: it draws the arm out, to parry it and riposte)
           if (this.stopHits > 0 && this.rnd() < Math.min(0.85, 0.4 + 0.2 * this.stopHits) * this.style.lineSense) { step('advance'); this.begin('draw'); }
           else { this.aimAt = 'torso'; step('advance'); this.begin('attack'); }
@@ -155,14 +156,14 @@ export class Opponent implements Controller {
         I.extend = 0.1; I.lunge = false;
         this.inLine(I, this.target(o, 'torso'));
         if (closing > 0.6 && see.dChest < 1.0) { this.side = this.sideOf(see.tip); this.begin('parry'); break; }
-        if (this.since > 0.9) { this.aimAt = 'torso'; this.begin(see.gap < 1.5 ? 'attack' : 'measure'); }
+        if (this.since > 0.9) { this.aimAt = 'torso'; this.begin(see.gap < 1.5 + REACH_GAIN ? 'attack' : 'measure'); }
         break;
       }
       case 'attack': {
         // the arm first, then the legs; the point kept on its target all the way
-        { const tg = this.target(o, this.aimAt), e = see.gap < 0.9 ? Math.max(0.15, Math.min(1, reachFor(me, tg))) : 1;
+        { const tg = this.target(o, this.aimAt), e = see.gap < 0.9 + REACH_GAIN ? Math.max(0.15, Math.min(1, reachFor(me, tg))) : 1;
           I.extend = e; this.inLine(I, tg, e); }
-        if (me.extension > 0.55 && !me.act && !I.lunge) I.lunge = this.aimAt === 'torso' || see.gap > 0.9;
+        if (me.extension > 0.55 && !me.act && !I.lunge) I.lunge = this.aimAt === 'torso' || see.gap > 0.9 + REACH_GAIN;
         if ((me.lunge > 0.98 && this.since > 0.45) || this.since > 1.3) this.begin('recover');
         break;
       }
@@ -180,7 +181,7 @@ export class Opponent implements Controller {
         } else {
           this.struck = true;
           I.extend = 1; this.inLine(I, this.target(o, 'torso'), 1, [BEAT.hold * this.side, 0.03]);
-          if (!me.act && !I.lunge) I.lunge = see.gap > 0.95;
+          if (!me.act && !I.lunge) I.lunge = see.gap > 0.95 + REACH_GAIN;
         }
         if ((me.lunge > 0.98 && this.since > 0.55) || this.since > 1.4) this.begin('recover');
         break;
@@ -190,7 +191,7 @@ export class Opponent implements Controller {
         if (this.approach(see, canStep, step)) break;
         I.extend = 1;
         this.inLine(I, this.target(o, 'torso'), 1, [0.22 * this.side, 0.04]);
-        if (me.extension > 0.45 && !me.act && !I.lunge) I.lunge = see.gap > 0.95;
+        if (me.extension > 0.45 && !me.act && !I.lunge) I.lunge = see.gap > 0.95 + REACH_GAIN;
         if ((me.lunge > 0.98 && this.since > 0.55) || this.since > 1.4) this.begin('recover');
         break;
       }
@@ -201,7 +202,7 @@ export class Opponent implements Controller {
         if (canStep && see.dChest < 0.95) step('retreat');
         if (see.ext < 0.5) {
           this.aimAt = 'torso';
-          if (see.gap <= 1.5) this.begin('attack');
+          if (see.gap <= 1.5 + REACH_GAIN) this.begin('attack');
           // (from further, a step in first; and if they stop-hit its steps, the step is a lure)
           else if (canStep) { step('advance'); this.begin(this.stopHits > 0 && this.rnd() < Math.min(0.85, 0.4 + 0.2 * this.stopHits) * this.style.lineSense ? 'draw' : 'attack'); }
         }
@@ -228,7 +229,7 @@ export class Opponent implements Controller {
       case 'riposte': {
         // (as long an arm as the distance wants: close, a straight arm slides past)
         { const tg = this.target(o, 'torso'), e = Math.max(0.15, Math.min(1, reachFor(me, tg)));
-          I.extend = e; if (!I.lunge) I.lunge = see.gap > 1.0 && e >= 1;
+          I.extend = e; if (!I.lunge) I.lunge = see.gap > 1.0 + REACH_GAIN && e >= 1;
           this.inLine(I, tg, e); }
         if (this.since > 0.55) this.begin('recover');
         break;
@@ -243,7 +244,7 @@ export class Opponent implements Controller {
    */
   private approach(see: Seen, canStep: boolean, step: (s: 'advance') => void): boolean {
     const me = this.self, I = this.I;
-    if (see.gap > 1.72 && this.since < 1.5) {
+    if (see.gap > 1.72 + REACH_GAIN && this.since < 1.5) {
       if (!me.act && canStep) step('advance');
       I.extend = 0.15; this.inLine(I, this.target(this.other, 'torso'));
       this.since = Math.min(this.since, 0.001);
@@ -261,7 +262,7 @@ export class Opponent implements Controller {
     const weight = (a: Answer) => (a === 'wait' ? w.wait * (1.6 - 1.4 * tired) : w[a] * (0.25 + tired));
     const fit: Answer[] = ['wait'];
     // (beat and take close in themselves, from not too far)
-    if (see.gap < 2.4 && see.gap > 1.1) fit.push('beat', 'take');
+    if (see.gap < 2.4 + REACH_GAIN && see.gap > 1.1 + REACH_GAIN) fit.push('beat', 'take');
     const total = fit.reduce((s, a) => s + weight(a), 0);
     if (total <= 0 || this.rnd() > 0.05) return null;
     let r = this.rnd() * total;

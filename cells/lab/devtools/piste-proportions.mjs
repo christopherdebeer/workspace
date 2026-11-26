@@ -17,7 +17,7 @@ const c = f.capsules;
 const rows = [];
 const row = (what, ours, ref, unit = 'cm') => rows.push([what, ours, ref, unit]);
 row('upper arm', BODY.upperArm * 100, 0.186 * H * 100);
-row('forearm (elbow to grip)', BODY.forearm * 100, 0.146 * H * 100);
+row('forearm (elbow to grip)', BODY.forearm * 100, 0.146 * H * 100 + 6.5);
 row('thigh (hip to knee)', 46, 0.245 * H * 100);
 row('shank (knee to ankle)', 46, 0.246 * H * 100);
 row('shoulder joints apart', len(sub(f.shoulder, c[7].a)) * 100, 36);
