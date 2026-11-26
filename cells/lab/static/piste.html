@@ -79,6 +79,7 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 #replayRate{font:11px ui-monospace,Menlo,monospace;letter-spacing:.2em;color:#9cf;text-transform:uppercase}
 #replayNotes{margin:8px 0 0;font:13px/1.6 "Helvetica Neue",Helvetica,Arial,sans-serif;white-space:pre-line}
 #replay .acts{margin-top:10px;display:flex;gap:10px}
+#replayHow{margin-top:6px;font-size:9px;letter-spacing:.2em;text-transform:uppercase;opacity:.45}
 .replayEnded #replayRate{color:#fc9}
 .preview #slow,.preview #rate,.preview #lesson,.preview .card,.preview #replay{display:none!important}
 .study #top,.study #labels,.study #clock,.study #hint,.study #bar,.study #arm,.study #mid{display:none}
@@ -130,8 +131,8 @@ body:not(.menu) #menu{display:none}
 <div id="mPractice" hidden><h3>practice</h3><div id="mLevels" class="list"></div><button class="back">&#8592; back</button></div>
 <div id="mSettings" hidden><h3>settings</h3><div id="mOpts"></div><button class="back">&#8592; back</button></div>
 <div class="foot">tap the room to watch · <a href="{{readme}}">notes</a></div></div>
-<div id="watchHint">tap for the menu</div>
-<div id="replay"><div id="replayRate"></div><div id="replayNotes"></div><div class="acts"><button id="rAgain">&#8634; again</button><button id="rOn" class="go">go on &#8594;</button></div></div>
+<div id="watchHint">tap for the menu · drag to turn · pinch to zoom</div>
+<div id="replay"><div id="replayRate"></div><div id="replayNotes"></div><div id="replayHow">drag to turn · pinch to zoom · two fingers to move · double tap to reset</div><div class="acts"><button id="rAgain">&#8634; again</button><button id="rOn" class="go">go on &#8594;</button></div></div>
 <pre id="readout"></pre>
 <div id="bar"><a href="?">menu</a><a href="{{readme}}">notes</a></div>
 <script type="module" src="{{app}}"></script></body></html>

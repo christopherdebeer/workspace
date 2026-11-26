@@ -138,7 +138,7 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 
 ## The menu
 
-The menu sits over a bout of its own: two of the AI fencing behind it, ceremony and all, from the side on a wide screen and from high behind on a tall one. A tap on the room hides the menu to watch, and another brings it back. It has four ways in. Learn opens the lessons. Practice fences a partner at a level you choose. Challenge is the levels in turn: beat one and the next is unlocked, and a tap goes on to it. Settings covers the right thumb's scheme, the camera, the kit (posed or simulated cloth), what happens between touches, replays and the readout. They're kept on this device (`settings.ts`), and a flag in the address still wins over a setting.
+The menu sits over a bout of its own: two of the AI fencing behind it, ceremony and all, from the side on a wide screen and from high behind on a tall one. A tap on the room hides the menu to watch, and another brings it back. Watching (the menu's bout, `auto`, or any replay), the camera can be taken in hand: drag to orbit, pinch or the wheel to zoom, two fingers (or the right button, or shift) to pan, and a double tap puts it back. It moves the automatic camera, which goes on following the fencers. A new touch's replay starts from the automatic camera again. It has four ways in. Learn opens the lessons. Practice fences a partner at a level you choose. Challenge is the levels in turn: beat one and the next is unlocked, and a tap goes on to it. Settings covers the right thumb's scheme, the camera, the kit (posed or simulated cloth), what happens between touches, replays and the readout. They're kept on this device (`settings.ts`), and a flag in the address still wins over a setting.
 
 ## Between touches
 

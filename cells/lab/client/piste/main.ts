@@ -238,8 +238,9 @@ function scoreboard(b: Bout) {
   $('arm').classList.toggle('on', f > 0.12);
 }
 canvas.addEventListener('pointerdown', () => {
-  // (in the menu, a tap on the room hides the menu to watch the bout behind it, and brings it back)
-  if (mode === 'menu') { body.classList.toggle('watching'); return; }
+  // (in the menu, a tap on the room hides the menu to watch the bout behind it: see the watching camera, which tells a
+  // tap from a drag)
+  if (mode === 'menu') return;
   $('hint').style.opacity = '0';
   if (bout.phase === 'over') {
     if (challenge && bout.score[0] > bout.score[1] && levelIdx + 1 < LEVELS.length) { location.search = `?level=${levelIdx + 1}&challenge`; return; }
@@ -363,6 +364,69 @@ const t0 = Number(qs.get('t') ?? 0) || 0;
 for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); if (s > t0 - 1.5) renderer.simulate(bout); }
 recorder?.reset();
 
+// ─── the camera by hand, while watching (a replay; a bout nobody's fencing): drag to orbit, pinch to zoom, two fingers
+// (or the right button, or shift) to pan, a double tap to put it back. It moves the automatic camera, which goes on
+// following the fencers ────────────────────────────────────────────────────────────────────────────────────────────
+const cam = { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0, 0] as V, used: false };
+function resetCam() { cam.yaw = cam.pitch = 0; cam.zoom = 1; cam.pan = [0, 0, 0]; cam.used = false; }
+const watchable = () => !!replay || auto;
+/** the view as the hand has moved it: orbited about where it looks, nearer or further, and shifted */
+function byHand(v: View): View {
+  if (!cam.used) return v;
+  const off = [v.eye[0] - v.at[0], v.eye[1] - v.at[1], v.eye[2] - v.at[2]], r = Math.hypot(off[0], off[1], off[2]) || 1;
+  const yaw = Math.atan2(off[0], off[2]) + cam.yaw, pitch = clamp(Math.asin(clamp(off[1] / r, -1, 1)) + cam.pitch, -0.05, 1.45), d = clamp(r * cam.zoom, 0.7, 16);
+  const at: V = [v.at[0] + cam.pan[0], v.at[1] + cam.pan[1], v.at[2] + cam.pan[2]];
+  const eye: V = [at[0] + d * Math.sin(yaw) * Math.cos(pitch), Math.max(0.15, at[1] + d * Math.sin(pitch)), at[2] + d * Math.cos(yaw) * Math.cos(pitch)];
+  // (out of anyone's head now: both bodies drawn)
+  return { ...v, eye, at, self: -1 };
+}
+{
+  const ptrs = new Map<number, { x: number; y: number; button: number }>();
+  let tapLater: ReturnType<typeof setTimeout> | undefined;
+  let start: { t: number; moved: number } | null = null, lastTap = 0, prev: { cx: number; cy: number; d: number } | null = null;
+  const centre = () => { const ps = [...ptrs.values()]; const cx = ps.reduce((s2, p) => s2 + p.x, 0) / ps.length, cy = ps.reduce((s2, p) => s2 + p.y, 0) / ps.length; return { cx, cy, d: ps.length > 1 ? Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) : 0 }; };
+  // (panning moves where the camera looks, across and up the screen, in proportion to how far away it is)
+  const pan = (dx: number, dy: number) => {
+    const v = replay ? replayView(replay.r.bout) : view(bout), f = [v.at[0] - v.eye[0], v.at[2] - v.eye[2]], l = Math.hypot(f[0], f[1]) || 1;
+    const right: V = [-f[1] / l, 0, f[0] / l], k = 0.0016 * Math.hypot(v.eye[0] - v.at[0], v.eye[1] - v.at[1], v.eye[2] - v.at[2]) * cam.zoom;
+    cam.pan = [cam.pan[0] - right[0] * dx * k, cam.pan[1] + dy * k, cam.pan[2] - right[2] * dx * k];
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    if (!watchable()) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button });
+    if (ptrs.size === 1) start = { t: performance.now(), moved: 0 };
+    prev = centre();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const p = ptrs.get(e.pointerId); if (!p || !watchable()) return;
+    p.x = e.clientX; p.y = e.clientY;
+    const c = centre(); if (!prev) { prev = c; return; }
+    const dx = c.cx - prev.cx, dy = c.cy - prev.cy;
+    if (start) start.moved += Math.hypot(dx, dy);
+    if (ptrs.size > 1) { if (prev.d > 0 && c.d > 0) cam.zoom = clamp(cam.zoom * prev.d / c.d, 0.25, 4); pan(dx, dy); }
+    else if (p.button === 2 || e.shiftKey) pan(dx, dy);
+    else { cam.yaw -= dx * 0.006; cam.pitch += dy * 0.004; }
+    if (start && start.moved > 6) cam.used = true;
+    prev = c;
+  });
+  const up = (e: PointerEvent) => {
+    if (!ptrs.delete(e.pointerId)) return;
+    prev = ptrs.size ? centre() : null;
+    if (ptrs.size || !start) return;
+    // (a tap, not a drag: in the menu it hides or brings back the menu; two quick taps put the camera back)
+    if (start.moved < 8 && performance.now() - start.t < 350) {
+      const now = performance.now();
+      // (a single tap waits a moment, in case it's the first of two)
+      if (now - lastTap < 320) { resetCam(); lastTap = 0; clearTimeout(tapLater); }
+      else { lastTap = now; if (mode === 'menu') tapLater = setTimeout(() => body.classList.toggle('watching'), 330); }
+    }
+    start = null;
+  };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', (e) => { if (!watchable()) return; e.preventDefault(); cam.zoom = clamp(cam.zoom * Math.exp(e.deltaY * 0.001), 0.25, 4); cam.used = true; }, { passive: false });
+  canvas.addEventListener('contextmenu', (e) => { if (watchable()) e.preventDefault(); });
+}
+
 // ─── the warm-up: free until the right thumb comes to rest for a few seconds, where you are then being your guard;
 // the count over their salute, then allez ──────────────────────────────────────────────────────────────────────────
 const HOLD = 3, STILL = 0.08;
@@ -409,14 +473,15 @@ function frame(now: number) {
     // (the box has locked on a touch: see it again before the referee goes on)
     if (mode === 'bout' && replays && bout.phase === 'halt' && bout.box.first !== null && bout.box.locked(bout.t) && replayedFor !== bout.box.first) {
       replayedFor = bout.box.first;
-      startReplay(bout.box.first - 1.3, bout.box.first + 0.25, bout.box.first);
+      resetCam(); startReplay(bout.box.first - 1.3, bout.box.first + 0.25, bout.box.first);
     }
   }
   body.style.setProperty('--slow', String(replay ? 0 : clamp((1 - director.slow) / (1 - 0.2), 0, 1)));
   $('rate').textContent = !replay && director.slow < 0.93 ? `${director.slow.toFixed(2)}×` : '';
   scoreboard(replay ? replay.r.bout : bout);
   renderer.resize(Math.min(devicePixelRatio || 1, 2));
-  renderer.draw(replay ? replay.r.bout : bout, { ...(replay ? replayView(replay.r.bout) : view(bout)), clay, bodies });
+  const shown = replay ? replayView(replay.r.bout) : view(bout);
+  renderer.draw(replay ? replay.r.bout : bout, { ...(watchable() ? byHand(shown) : shown), clay, bodies });
   marks();
   lessonHud();
   frames++;
