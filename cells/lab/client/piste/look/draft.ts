@@ -186,10 +186,23 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     // the cap: as wide as the sleeve's round just below it; its height solved (bisection) so the curve across its top
     // is the armhole's length and the cap's ease, the crown opposite the underarm seam (Fab's sleeve head)
     const round = S.round.map((x, k) => (k === 0 ? S.round[1] * 1.02 : x));
-    const wCap = round[0], capCurve = (hgt: number) => Array.from({ length: SCOLS }, (_, c2) => { const u = c2 / (SCOLS - 1); return [u * wCap, -hgt * Math.sin(Math.PI * u) ** 2] as [number, number]; });
-    const curveLen = (pts: [number, number][]) => pts.slice(1).reduce((a, p, k) => a + Math.hypot(p[0] - pts[k][0], p[1] - pts[k][1]), 0);
-    let lo = 0, hi = 0.3; for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (curveLen(capCurve(m)) < armholeLen * (1 + P.capEase)) lo = m; else hi = m; }
-    const capH = (lo + hi) / 2, cap = capCurve(capH), capL: number[] = [0]; for (let k = 1; k < SCOLS; k++) capL.push(capL[k - 1] + Math.hypot(cap[k][0] - cap[k - 1][0], cap[k][1] - cap[k - 1][1]));
+    // (drafted to its own armhole: its front half to the armhole's front edge and its back half to the back's, each with
+    // the ease; the height and where the crown falls across the sleeve solved together. The front's edge is the longer,
+    // so the crown sits back of the middle, as a sleeve head's does)
+    const wCap = round[0], frontArm = L[ROWS - armRow - 1], backArm = armholeLen - frontArm;
+    const half = (w: number, h: number, n2 = 60) => { let a = 0; for (let k = 1; k <= n2; k++) { const u0 = (k - 1) / n2, u1 = k / n2; a += Math.hypot(w / n2, h * (Math.sin((Math.PI / 2) * u1) ** 2 - Math.sin((Math.PI / 2) * u0) ** 2)); } return a; };
+    let wf = wCap / 2, capH = 0.1;
+    for (let it = 0; it < 40; it++) {
+      // (for this height, the front half's width that gives it its length; then the height that gives the back its)
+      let lo = 0.02 * wCap, hi = 0.98 * wCap; for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (half(m, capH) < frontArm * (1 + P.capEase)) lo = m; else hi = m; } wf = (lo + hi) / 2;
+      let hl = 0, hh = 0.3; for (let k = 0; k < 30; k++) { const m = (hl + hh) / 2; if (half(wCap - wf, m) < backArm * (1 + P.capEase)) hl = m; else hh = m; } capH = (hl + hh) / 2;
+    }
+    // (the cap row's points: up from the front's underarm to the crown at wf, down to the back's underarm)
+    const capY = (x: number) => (x <= wf ? -capH * Math.sin((Math.PI / 2) * (x / wf)) ** 2 : -capH * Math.sin((Math.PI / 2) * ((wCap - x) / (wCap - wf))) ** 2);
+    const cap = Array.from({ length: SCOLS }, (_, c2) => { const x = (c2 / (SCOLS - 1)) * wCap; return [x, capY(x)] as [number, number]; });
+    const capL: number[] = [0]; for (let k = 1; k < SCOLS; k++) capL.push(capL[k - 1] + Math.hypot(cap[k][0] - cap[k - 1][0], cap[k][1] - cap[k - 1][1]));
+    // (the arc length at the crown, between the columns either side of it)
+    const kc = Math.min(SCOLS - 2, Math.floor((wf / wCap) * (SCOLS - 1))), crownL = capL[kc] + Math.hypot(wf - cap[kc][0], -capH - cap[kc][1]);
     // (laid along a smooth curve through the elbow, not the arm's kink: rings on a kinked line cross on the inside of the
     // bend and lay the cloth there inside out)
     const segs = [len(sub(arm[1], arm[0])), len(sub(arm[2], arm[1]))], total = segs[0] + segs[1];
@@ -204,7 +217,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       const t = r / (SROWS - 1), rnd = interp(S.stations, round, t), [p, d] = along(t * Math.min(1, S.length / total));
       // (laid with its underarm seam (column 0) toward the armpit and its first quarter facing the jacket's front, which
       // is the way it's sewn: the notches, not a guess from where it lies)
-      const down = norm(sub([0, -1, 0], scale(d, -d[1]))), frontDir = norm(sub(scale(B.r, -1), scale(d, -dot(B.r, d)))), side2 = norm(sub(frontDir, scale(down, dot(frontDir, down))));
+      // (the underarm seam toward the body: measured from the arm toward the trunk's axis, which is never along the arm (a
+      // hanging arm's "down" is, and flips the rings from one to the next: a twist))
+      const toBody = sub([B.pelvis[0], p[1], B.pelvis[2]], p), down = norm(sub(toBody, scale(d, dot(toBody, d)))), frontDir = norm(sub(scale(B.r, -1), scale(d, -dot(B.r, d)))), side2 = norm(sub(frontDir, scale(down, dot(frontDir, down))));
       for (let c = 0; c < SCOLS; c++) {
         // (the cap's crown carried down into the first rows, fading out where the sleeve is a plain tube)
         const fade = 1 - Math.min(1, (t * S.length) / Math.max(0.04, capH * 1.6));
@@ -212,9 +227,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
         // through the elbow)
         const outside = Math.sin((Math.PI * c) / (SCOLS - 1)) ** 2, bendY = (S.bend ?? 0) * outside * Math.max(0, Math.min(1, (t - 0.15) / 0.55));
         // (symmetric about its centre line, so the underarm seam's two edges are the same length)
-        // (the rear sleeve cut as the weapon sleeve's mirror image, as a pair is cut from folded cloth: the arms are mirror
-        // images, so going round from the underarm to the front turns the other way on each)
-        piece.flat.push([(c / (SCOLS - 1) - 0.5) * rnd * (s === 'W' ? 1 : -1), t * S.length + bendY + cap[c][1] * fade * fade]);
+        // (one paper for both: each is laid with its underarm seam toward the body and its first quarter to the front, and
+        // the body's on opposite sides of the two arms, so the pair comes out mirror images, as a pair is cut)
+        piece.flat.push([(c / (SCOLS - 1) - 0.5) * rnd, t * S.length + bendY + cap[c][1] * fade * fade]);
         const phi = (c / (SCOLS - 1)) * Math.PI * 2, rad = r === SROWS - 1 ? 0.045 : Math.min(0.09, rnd / (Math.PI * 2) + 0.01);
         piece.at.push(madd(madd(p, down, Math.cos(phi) * rad), side2, Math.sin(phi) * rad));
       }
@@ -230,8 +245,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       // (the crown's notch to the shoulder seam, and each half of the cap eased into its own half of the armhole: the
       // front's edge is longer than the back's (it climbs over the chest), so sewing round the whole by length would
       // put the crown off the shoulder seam and drag both)
-      const frontLen = L[ROWS - armRow - 1], share0 = capL[c] / capL[SCOLS - 1], share = nearFront ? share0 : 1 - share0;
-      const want = share <= 0.5 ? (share / 0.5) * frontLen : frontLen + ((share - 0.5) / 0.5) * (armholeLen - frontLen);
+      // (the front half, to its crown, over the front's edge; the back half over the back's)
+      const cl = capL[c], want = cl <= crownL ? (cl / crownL) * frontArm : frontArm + ((cl - crownL) / (capL[SCOLS - 1] - crownL)) * backArm;
+      void nearFront;
       let k = 0; while (k < L.length - 2 && L[k + 1] < want) k++;
       stitches.push({ p: n + c, q: loop[k], q2: loop[k + 1], t: (want - L[k]) / Math.max(1e-9, L[k + 1] - L[k]), seam: `sleeve cap ${s}` });
     }

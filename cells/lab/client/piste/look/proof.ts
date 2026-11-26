@@ -92,7 +92,8 @@ function facingOf(G: Garment, pc: Garment['pieces'][number]): number {
 export function airChecks(G: Garment): { checks: Check[]; x: Float64Array } {
   const faces = new Map(G.pieces.map((pc) => [pc, facingOf(G, pc)])), centres = new Map(G.pieces.map((pc) => [pc, centreOf(G, pc)]));
   const facing = (pc: Garment['pieces'][number]) => faces.get(pc)!, centre = (pc: Garment['pieces'][number]) => centres.get(pc)!;
-  const S = settle(G, [], { seconds: 3, gravity: 0, free: true, passes: 10 });
+  // (long and hard: no hurry, and short of it the solver's unfinished business reads as stretch)
+  const S = settle(G, [], { seconds: 10, gravity: 0, free: true, passes: 20 });
   const X = (i: number) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
   const out: Check[] = [];
   const seams = new Map<string, typeof G.stitches>();
@@ -137,7 +138,7 @@ export function airChecks(G: Garment): { checks: Check[]; x: Float64Array } {
  * from a fault in the making (still stretched).
  */
 export function formChecks(G: Garment, form: Capsule[], regions: { name: string; at: (piece: string, r: number, c: number) => boolean }[]): Check[] {
-  const S = settle(G, form, { seconds: 4, gravity: 0, free: true, sleeveCaps: form, passes: 10 });
+  const S = settle(G, form, { seconds: Number(process.env.FORM_S ?? 10), gravity: 0, free: true, sleeveCaps: form, passes: Number(process.env.FORM_P ?? 20) });
   const out: Check[] = [];
   const stretch = (e: (typeof S.edges)[number]) => judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest);
   const edges = S.edges.filter((e) => e.dir === 'across' || e.dir === 'along');
