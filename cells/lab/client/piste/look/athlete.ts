@@ -407,10 +407,23 @@ export function buildAthlete(): Athlete {
     const edgeV = seam.loop.map(([i, j]) => torso.base + i * TJ + j), edgeA = seam.pts.map(around);
     const nearest = (j: number) => { const a = (j / SS) * Math.PI * 2; let bk = 0, bd = 9; edgeA.forEach((e, k) => { const d = Math.abs(((e - a + 3 * Math.PI) % (2 * Math.PI)) - Math.PI); if (d < bd) { bd = d; bk = k; } }); return edgeV[bk]; };
     const sewn = (i: number) => smooth(Math.min(1, i / SEW));
+    // (the armhole's edge, read round the sleeve by angle: the sleeve's first ring lies on it, so the band that sews them
+    // can't turn inside out; over the next rings it eases into the sleeve's own round)
+    const byAngle = seam.pts.map((q, k) => ({ q, a: edgeA[k] })).sort((x, y) => x.a - y.a);
+    const onEdge = (a: number): V => {
+      const n = byAngle.length;
+      for (let k = 0; k < n; k++) {
+        const A0 = byAngle[k], A1 = byAngle[(k + 1) % n], a0 = A0.a, a1 = k + 1 < n ? A1.a : A1.a + Math.PI * 2;
+        const aa = a < a0 ? a + Math.PI * 2 : a;
+        if (aa >= a0 && aa <= a1) return lerp(A0.q, A1.q, (aa - a0) / Math.max(1e-6, a1 - a0));
+      }
+      return byAngle[0].q;
+    };
     // the inside of the elbow (toward the chord from shoulder to wrist) gathers as it bends
     const E = pts[1], inner = norm(sub(lerp(pts[0], pts[2], 0.5), E));
     loft(m, rings, {
       stitch: { v: edgeV, p: seam.pts },
+      place: (i, j, p) => (i < SEW ? lerp(onEdge((j / SS) * Math.PI * 2), p, sewn(i)) : p),
       fold: { driver: armSign > 0 ? 0 : 1, relief: (row,a,radial) => {
         const compression = 0.12 + 0.88 * smooth((1 + dot(radial,inner)) * 0.5);
         // Two oblique gathers form at the inside elbow and flatten across the outside.
@@ -436,9 +449,9 @@ export function buildAthlete(): Athlete {
   };
   const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.092);
   // (each sleeve's own first ring at its shoulder joint, a little out along the arm, the armhole's edge sewn to it)
-  sleeve([madd(madd(f.shoulder, holes[0].ax, 0.015), up, -0.01), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1, holes[0]);
+  sleeve([madd(madd(f.shoulder, holes[0].ax, 0.03), up, -0.01), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1, holes[0]);
   // (the rear sleeve runs on over the bare wrist, closed onto it, so its open end is filled)
-  sleeve([madd(madd(c[7].a, holes[1].ax, 0.015), up, -0.015), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.018)], B.upperR, B.foreR, PART.rearArm, -1, holes[1]);
+  sleeve([madd(madd(c[7].a, holes[1].ax, 0.03), up, -0.015), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.018)], B.upperR, B.foreR, PART.rearArm, -1, holes[1]);
 
   // The seat: closes the opening between the two leg tops, inside the jacket's hem and the legs. It goes with the pelvis
   // (only its lowest rings take a little of each thigh), so a thigh turning in guard doesn't carry it out through the hem
