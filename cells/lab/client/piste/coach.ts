@@ -40,7 +40,8 @@ export class Coach implements Controller {
   intent(dt = 1 / 60): Intent {
     const I = this.I;
     // (with a target, no further than reaches it: too long an arm and the point slides past)
-    const want = this.aim && !this.given ? Math.min(this.extend, Math.max(0.15, reachFor(this.me, this.aim()))) : this.extend;
+    // (and once its blade's been beaten or found it holds the arm where it was: a deflected point doesn't lengthen)
+    const want = this.aim && !this.given ? Math.min(this.extend, Math.max(0.15, reachFor(this.me, this.aim()))) : this.given ? Math.min(this.extend, this.arm) : this.extend;
     this.arm += Math.max(-this.rate * dt * 2, Math.min(this.rate * dt, want - this.arm));
     I.extend = this.arm; I.lunge = this.lunge; I.roll = 0;
     I.step = this.next; this.next = null;

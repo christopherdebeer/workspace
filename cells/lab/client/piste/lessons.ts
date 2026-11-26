@@ -78,12 +78,20 @@ const PARRY_HIGH = 0.08;
 /** the distance the parry lessons start from: the coach's arm reaches you from here without a lunge, m */
 /** every lesson's distance, measured for an athlete whose straight arm puts the guard 0.635 m from the shoulder; `reach`
  * is what's added for this athlete's longer arm (fencer.ts: an adult's arm, and shoulders set where an adult's are) */
-export const DISTANCE: { reach: number; byLesson: Record<string, number> } = { reach: 0.1, byLesson: {} };
+// (each lesson's own, searched for: the middle of the range in which its right and its wrong students all get the
+// answer they should)
+export const DISTANCE: { reach: number; byLesson: Record<string, number> } = { reach: 0.1, byLesson: {
+  distance: 0.02, extension: 0.05, lunge: 0.1, 'advance-lunge': 0.12, quarte: 0.1, sixte: 0.12, septime: 0.04,
+  line: 0.1, 'one-two': 0.1, disengage: 0.16, 'second-intention': 0.16, beat: 0.3, octave: 0.07, 'stop-hit': 0.18,
+} };
 const PARRY_GAP = 1.1;
 /** how fast the coach's arm goes out in the parry lessons (per second) */
 const PARRY_TEMPO = 2;
 /** the beat attack starts from here: their line just short of you, you a lunge from them, m */
 const BEAT_GAP = 1.35;
+/** how far a sharp beat throws their point: across and up (rad). Clear of the attacker's whole arm, not just the chest:
+ * an adult's arm reaches into the line where a shorter one didn't */
+export const BEAT_GIVE: [number, number] = [0.5, 0.15];
 /** the disengage: from where (you in arm's reach), and the coach's beat: its hand across (toward its left: your
  * blade's side) and its point */
 /** the one-two: from where, how far your arm must go before it believes the feint, how long it takes to see it, and how
@@ -96,7 +104,8 @@ const DIS = { gap: 1.6, sweep: -0.28, sweepPoint: -0.1, time: 0.35 };
 /** sixte: where the coach's hand starts (across, to your outside) and how far outside the middle of your chest it aims, m */
 const SIXTE = { gap: 1.05, aim: 0.06, under: [0.12, -0.2] as [number, number], viaFor: 0.35, handAfter: -0.3 };
 /** the low lines: where on the trunk (pelvis 0 .. chest 1) septime's attack goes, and how far down the thigh octave's */
-const LOW = { at: 0.32, thigh: 0.25, gap: 1.05, tempo: 1.1, outside: 0.09, hand0: -0.16, octaveGap: 1.05, point0: 0 };
+export const LOW = { at: 0.32, thigh: 0.25, gap: 1.05, tempo: 1.1, outside: 0.15, hand0: -0.16, octaveGap: 1.05, point0: 0, octaveTempo: 1.1 };
+// (octave: the attack aimed further outside the thigh than it was, where an adult's longer guard sweeps across it)
 
 /**
  * A parry and its riposte, in one of the four lines. Each line says where the coach's point goes (`at`), where its hand
@@ -140,7 +149,7 @@ const LINES: Record<string, Line> = {
     extra: 'In the low lines the point drops and sweeps: the hand stays about where it was, the blade swings down across the attack like a pendulum.' },
   octave: { id: 'octave', name: 'octave', where: 'outside line (your right), low', side: 1, low: true, thumb: 'right thumb down and a little right',
     // (your outside low line: the outer side of your front leg, outside your blade)
-    at: (c) => add(lerp(c.student.capsules[9].a, c.student.capsules[9].b, LOW.thigh), scale(c.student.frame.r, LOW.outside)), hand0: [LOW.hand0, -0.06], point0: [0, LOW.point0], gap: LOW.octaveGap, tempo: LOW.tempo,
+    at: (c) => add(lerp(c.student.capsules[9].a, c.student.capsules[9].b, LOW.thigh), scale(c.student.frame.r, LOW.outside)), hand0: [LOW.hand0, -0.06], point0: [0, LOW.point0], gap: LOW.octaveGap, tempo: LOW.octaveTempo,
     extra: 'In the low lines the point drops and sweeps: the hand stays about where it was, the blade swings down across the attack like a pendulum.' },
 };
 
@@ -260,6 +269,9 @@ export const LESSONS: Lesson[] = [
       if (c.w.attackAt !== null && c.them.extension > 0.6) co.lunge = true;
       const [a, b] = c.lights, locked = c.bout.box.locked(c.bout.t);
       if (a && b && locked) return { ok: false, say: 'coup double', detail: 'both scored: in épée that\'s no use when it\'s close. Hit earlier, as they step' };
+      // (when your arm went out: a stop-hit is made as they step, so one begun after their attack has is late, whoever lands)
+      if (r.outAt === undefined && c.student.extension > 0.5) r.outAt = c.since;
+      if (b && locked && !a && c.w.attackAt !== null && r.outAt !== undefined && (r.outAt as number) > c.w.attackAt) return { ok: false, say: 'late', detail: `you extended ${(((r.outAt as number) - c.w.attackAt) * 1000).toFixed(0)} ms into their attack, and it landed first: extend as they step forward, before their arm comes down` };
       if (b && locked) return { ok: false, say: 'touched', detail: a ? '' : 'too late: extend as they step forward, before their arm comes down' };
       if (a && locked && r.attackT !== undefined && a.t > (r.attackT as number) + 0.04) return { ok: false, say: 'late', detail: `you hit ${((a.t - (r.attackT as number)) * 1000).toFixed(0)} ms into their attack: they ran onto your point this time, but against a real attack that's a double or worse. Hit as they step` };
       if (a && locked) return { ok: a.part === 'arm' || a.part === 'hand', say: a.part === 'arm' || a.part === 'hand' ? 'stop-hit' : 'touch, but not the arm', detail: a.part === 'arm' || a.part === 'hand' ? `on the ${a.part}, before their attack` : `on the ${a.part}: it scored, but the arm was nearer. Lift the point (right thumb up)` };
@@ -312,10 +324,10 @@ export const LESSONS: Lesson[] = [
       // (it holds a line at your chest; beaten, it gives, its point thrown off, and is slow to bring it back)
       if (r.set === undefined) { co.rest(); co.aim = () => chest(c.student); co.extend = 1; co.rate = 6; r.set = true; w.attackAt = 0; }
       const beaten = w.clashes.find((k) => k.at > 0.25);
-      if (beaten && !r.gave) { co.give(0.5, 0.15); r.gave = true; r.beatAt = beaten.at; }
+      if (beaten && !r.gave) { co.give(BEAT_GIVE[0], BEAT_GIVE[1]); r.gave = true; r.beatAt = beaten.at; }
       const [a, b] = c.lights, locked = c.bout.box.locked(c.bout.t);
       if (a && b && locked) return { ok: false, say: 'coup double', detail: beaten ? 'you beat it, but too late or too softly: it came back before you arrived' : 'you ran onto their line: beat it aside first' };
-      if (b && locked) return { ok: false, say: 'onto their point', detail: beaten ? 'the beat didn\'t carry it far enough aside' : 'beat their blade first (right thumb left, sharply)' };
+      if (b && locked) return { ok: false, say: 'onto their point', detail: (beaten ? 'the beat didn\'t carry it far enough aside' : 'beat their blade first (right thumb left, sharply)') + ` (it hit your ${b.part})` };
       if (a && locked) {
         if (!beaten) return { ok: false, say: 'no beat', detail: 'it landed, but past their point by luck: beat it first' };
         return { ok: true, say: 'beat, touch', detail: `in ${(c.since - (r.beatAt as number)).toFixed(2)} s after the beat, on the ${a.part}` };
