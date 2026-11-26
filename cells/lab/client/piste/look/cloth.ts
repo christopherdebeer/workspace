@@ -32,8 +32,9 @@ import { SKIN_STRIDE } from './athlete';
  * much of the body's motion the cloth is dragged toward each substep */
 export const CLOTH = { step: 1 / 480, maxSteps: 14, passes: 2, stretch: 1, shear: 0.6, bend: 0.5, omega: 1.4, damp: 0.995, drag: 0.04,
   /** thickness: how hard each pass pulls a point's curvature (its offset from its four neighbours' middle) toward the
-   * skin's under it. Thick cloth can't crease in short waves; it folds in broad ones */
-  thick: 0.2 };
+   * skin's under it (a scale on each piece's own, `thickness`). Thick cloth can't crease in short waves; it folds in
+   * broad ones */
+  thick: 1 };
 
 /** the ease: how far each point may stand off its place on the skin (m), along each kind of piece by row fraction */
 function ease(p: ClothPiece, row: number): number {
@@ -58,10 +59,18 @@ function ease(p: ClothPiece, row: number): number {
 function cut(p: ClothPiece, row: number): [number, number] {
   const j = p.joint ?? 0.5, near = (c: number, w: number) => Math.exp(-(((row - c) / w) ** 2));
   switch (p.kind) {
-    case 'jacket': return [1.02, 1.03 + 0.02 * near(0.6, 0.15)];
+    // (fitted: a little length for the hem to hang by, fullness only across the chest, where extending draws it)
+    case 'jacket': return [1.01, 1.008 + 0.017 * near(0.62, 0.12)];
     case 'sleeveW': case 'sleeveR': return [1.03 + 0.07 * near(j, 0.16) + 0.04 * near(j + 0.2, 0.12), 1.04 + 0.05 * near(j, 0.18)];
-    case 'breeches': return [1.02 + 0.07 * near(j, 0.14), 1.04 + 0.03 * near(j, 0.2)];
+    // (fitted through the seat and thigh, long over the knee)
+    case 'breeches': return [1.01 + 0.06 * near(j, 0.12), 1.012 + 0.02 * near(j, 0.16)];
   }
+}
+
+/** how thick each piece's cloth is (the pull a pass toward the skin's curvature): the jacket's body is the stiffest
+ * (layered, and the 800 N cloth); a sleeve bends at the elbow; the breeches between */
+function thickness(p: ClothPiece): number {
+  return p.kind === 'jacket' ? 0.38 : p.kind === 'breeches' ? 0.3 : 0.2;
 }
 
 const QUAD_VS = `#version 300 es
@@ -102,7 +111,7 @@ void main(){
 }`;
 /** a pass of the constraints, each point from its neighbours (Jacobi), then the body's: ease and backstop */
 const SOLVE_FS = HEAD + `
-uniform sampler2D X, Bind, MetaA, MetaB, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick;
+uniform sampler2D X, Bind, BindN, MetaA, MetaB, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick;
 out vec4 o;
 const ivec2 OFF[12] = ivec2[12](ivec2(1,0), ivec2(-1,0), ivec2(0,1), ivec2(0,-1), ivec2(1,1), ivec2(1,-1), ivec2(-1,1), ivec2(-1,-1), ivec2(2,0), ivec2(-2,0), ivec2(0,2), ivec2(0,-2));
 void main(){
@@ -128,7 +137,7 @@ void main(){
   }
   x += omega * acc / max(n, 1.0);
   // thickness: the point's offset from its neighbours' middle eased toward the skin's offset there
-  if (m4 > 3.5) x += kThick * ((midX / m4 + (a - midA / m4)) - x);
+  if (m4 > 3.5) x += min(1.0, kThick * texelFetch(BindN, tc(i), 0).w) * ((midX / m4 + (a - midA / m4)) - x);
   // the body: within the ease of its place on the skin, and never inside it
   vec3 nn = normalize(mix(texelFetch(N0, tc(i), 0).xyz, texelFetch(N1, tc(i), 0).xyz, s));
   float slack = bi.w;
@@ -210,7 +219,7 @@ export class GpuCloth {
       for (let r = 0; r < p.R; r++) for (let c = 0; c < S; c++) {
         const v = (p.base + r * p.J + c) * SKIN_STRIDE, t = (off + r * S + c) * 4;
         bind.set([V[v], V[v + 1], V[v + 2], ease(p, r / (p.R - 1))], t);
-        bindN.set([V[v + 3], V[v + 4], V[v + 5], 0], t);
+        bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);
         jt.set(V.subarray(v + 12, v + 16), t); wt.set(V.subarray(v + 16, v + 20), t);
         metaA.set([r, c, p.R, S], t); const [al, ar] = cut(p, r / (p.R - 1)); metaB.set([off, al, 0.002, ar], t);
       }
@@ -266,7 +275,7 @@ export class GpuCloth {
         st.spare = [st.x, st.p]; st.x = nx; st.p = np;
         for (let it = 0; it < CLOTH.passes; it++) {
           const out = st.spare[0];
-          this.pass('solve', this.fb([out]), { X: st.x, Bind: this.stat.bind, MetaA: this.stat.metaA, MetaB: this.stat.metaB, A0, A1, N0, N1 }, (l) => {
+          this.pass('solve', this.fb([out]), { X: st.x, Bind: this.stat.bind, BindN: this.stat.bindN, MetaA: this.stat.metaA, MetaB: this.stat.metaB, A0, A1, N0, N1 }, (l) => {
             gl.uniform1f(l.s, (k + 1) / n); gl.uniform1f(l.kStretch, CLOTH.stretch); gl.uniform1f(l.kShear, CLOTH.shear); gl.uniform1f(l.kBend, CLOTH.bend); gl.uniform1f(l.omega, CLOTH.omega); gl.uniform1f(l.kThick, CLOTH.thick);
           });
           st.spare[0] = st.x; st.x = out;
