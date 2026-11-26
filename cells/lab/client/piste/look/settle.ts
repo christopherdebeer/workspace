@@ -13,7 +13,7 @@ import { type V } from '../v3';
 
 export interface Settled { x: Float64Array; edges: { a: number; b: number; rest: number; dir: 'across' | 'along' | 'diag' | 'bend'; piece: number }[] }
 
-export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number } = {}): Settled {
+export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number; gravity?: number; free?: boolean } = {}): Settled {
   const n = G.n, x = new Float64Array(n * 3), prev = new Float64Array(n * 3);
   G.at.forEach((p, i) => { x.set(p, i * 3); prev.set(p, i * 3); });
   const edges: Settled['edges'] = [];
@@ -36,7 +36,7 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
     // inertia and gravity (damped hard: it's settling, not moving)
     for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++) {
       const j = i * 3 + a, v = (x[j] - prev[j]) * 0.9;
-      prev[j] = x[j]; x[j] += v + (a === 1 ? -9.81 * h * h : 0);
+      prev[j] = x[j]; x[j] += v + (a === 1 ? -(o.gravity ?? 9.81) * h * h : 0);
     }
     // (no point moves more than 5 mm a step, from where it was: much less than the thinnest part of the body, so the
     // cloth can't pass through it between one step and the next)
@@ -60,11 +60,11 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
         }
       }
       // (a tie pulls in only when it's taut: the crotch strap holding the hem to where it passes under the crotch)
-      for (const tie of G.ties ?? []) {
+      for (const tie of o.free ? [] : G.ties ?? []) {
         const a = tie.p * 3, dx = x[a] - tie.at[0], dy = x[a + 1] - tie.at[1], dz = x[a + 2] - tie.at[2], l = Math.hypot(dx, dy, dz);
         if (l > tie.len) { const m = tie.len / l; x[a] = tie.at[0] + dx * m; x[a + 1] = tie.at[1] + dy * m; x[a + 2] = tie.at[2] + dz * m; }
       }
-      for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
+      if (!o.free) for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
       // the body: out of every capsule, a little off it
       for (let i = 0; i < n; i++) {
         const p = P(i);
