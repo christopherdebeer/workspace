@@ -89,7 +89,7 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
 {
   const b = new Bout({ weapon: EPEE, to: 5 });
   // (far enough that the blades cross at their middles, not on a guard)
-  at(b, 1.85 + 2 * (GUARD_GAIN + 0.6 * (REACH_GAIN - GUARD_GAIN)));
+  at(b, 1.85 + GUARD_GAIN + 0.6 * (REACH_GAIN - GUARD_GAIN));
   const [A, B] = b.fencers;
   run(b, 0.6, () => ({ ...idle(), extend: 0.6 }));
   const tip0 = B.blade.tip;

@@ -79,7 +79,9 @@ export class Replay {
     // (the snapshot holds the intents in force when it was taken; what was given before it is done with)
     while (this.k < log.length && log[this.k].n < bout.n) this.k++;
   }
-  get done() { return this.bout.t >= this.to; }
+  // (within the same hair of the end that run() stops short at: the bout's clock is a sum of substeps, so it can land a
+  // rounding error below the end and never on it)
+  get done() { return this.bout.t >= this.to - 1e-9; }
   get t() { return this.bout.t; }
   /** run on by `dt` sim seconds (any amount: substep by substep) */
   run(dt: number) {
