@@ -51,6 +51,7 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
           x[p + a] += d; x[q + a] -= d * (1 - st.t); x[q2 + a] -= d * st.t;
         }
       }
+      for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
       // the body: out of every capsule, a little off it
       for (let i = 0; i < n; i++) {
         const p = P(i);

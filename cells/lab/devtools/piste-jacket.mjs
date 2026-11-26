@@ -34,7 +34,7 @@ const limit = () => {
   for (const qq of M.QUARTERS) P.widths[qq] = P.widths[qq].map((w, k) => Math.max(DRAFT.widths[qq][k] * 0.75, Math.min(DRAFT.widths[qq][k] * 1.25, w)));
   for (const qq of M.QUARTERS) P.lengths[qq] = Math.min(DRAFT.lengths[qq] * 1.2, P.lengths[qq]);
   for (const sd of ['W', 'R']) { P.sleeves[sd].round = P.sleeves[sd].round.map((x, k) => Math.max(DRAFT.sleeves[sd].round[k] * 0.75, Math.min(DRAFT.sleeves[sd].round[k] * 1.25, x))); P.sleeves[sd].length = Math.min(DRAFT.sleeves[sd].length * 1.1, P.sleeves[sd].length); }
-  P.shoulderW = Math.min(DRAFT.shoulderW * 1.25, P.shoulderW);
+  for (const sd of ['W', 'R']) P.sleeves[sd].bend = Math.min(0.12, P.sleeves[sd].bend ?? 0);
 };
 for (let round = 1; round <= ROUNDS; round++) {
   const t0 = Date.now();
@@ -47,12 +47,12 @@ for (let round = 1; round <= ROUNDS; round++) {
   const gaps = G.stitches.map((s) => Math.hypot(...[0, 1, 2].map((k) => S.x[s.p * 3 + k] - (S.x[s.q * 3 + k] * (1 - s.t) + S.x[s.q2 * 3 + k] * s.t))));
   const score = q(strain.filter((_, k) => S.edges[k].dir === 'across' || S.edges[k].dir === 'along'), 0.9) + 0.5 * q(gaps, 0.9);
   if (score > best.score) {
-    console.log(`\n── round ${round}: worse (${pct(score)} against ${pct(best.score)}); undone, alterations halved`);
+    console.log(`\n── round ${round}: worse (${pct(score)} against ${pct(best.score)}: stretch p90 ${pct(q(strain, 0.9))}, seams p90 ${cm(q(gaps, 0.9))} cm, worst ${cm(Math.max(...gaps))} cm); undone, alterations halved`);
     Object.assign(P, structuredClone(best.P)); damp *= 0.5; G = best.G; S = best.S;
     if (damp < 0.1) break; continue;
   }
   best = { score, P: structuredClone(P), G, S };
-  console.log(`\n── round ${round}` (${((Date.now() - t0) / 1000).toFixed(1)} s) ──  stretch p50 ${pct(q(strain, 0.5))} p90 ${pct(q(strain, 0.9))} p99 ${pct(q(strain, 0.99))} · seams: worst gap ${cm(Math.max(...gaps))} cm, p90 ${cm(q(gaps, 0.9))} · inside the body: ${off.filter((d) => d < -0.002).length} points`);
+  console.log(`\n── round ${round} (${((Date.now() - t0) / 1000).toFixed(1)} s) ──  stretch p50 ${pct(q(strain, 0.5))} p90 ${pct(q(strain, 0.9))} p99 ${pct(q(strain, 0.99))} · seams: worst gap ${cm(Math.max(...gaps))} cm, p90 ${cm(q(gaps, 0.9))} · inside the body: ${off.filter((d) => d < -0.002).length} points`);
   // by piece and band: across and along stretch, and the ease
   const moves = [], upper = [];
   G.pieces.forEach((pc, pi) => {
@@ -60,7 +60,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     const rows = [];
     for (let b = 0; b < bands; b++) {
       const frac = pc.kind === 'body' ? P.stations[b] / P.length : P.sleeves[pc.side].stations[b];
-      const r0 = Math.round(frac * (pc.rows - 1)), near = (r) => Math.abs(r - r0) <= 2;
+      const r0 = Math.round(pc.kind === 'body' ? M.rowAt(P, frac * P.length) : frac * (pc.rows - 1)), near = (r) => Math.abs(r - r0) <= 2;
       const rowOf = (i) => Math.floor((i - pc.base) / pc.cols);
       const sAcross = [], sAlong = [], ease = [];
       S.edges.forEach((e, k) => { if (e.piece !== pi || !near(rowOf(e.a))) return; if (e.dir === 'across') sAcross.push(strain[k]); if (e.dir === 'along') sAlong.push(strain[k]); });
@@ -84,12 +84,20 @@ for (let round = 1; round <= ROUNDS; round++) {
       }
     }
     if (pc.kind === 'sleeve') {
-      const along = q(S.edges.map((e, k) => (e.piece === pi && e.dir === 'along' ? strain[k] : null)).filter((v) => v !== null), 0.75);
-      if (along > 0.02) { P.sleeves[pc.side].length *= 1 + Math.min(0.08, along) * damp; moves.push(`sleeve ${pc.side} lengthened to ${cm(P.sleeves[pc.side].length)} cm (pulled ${pct(along)})`); }
+      // (pulled along its outside, from the shoulder to below the elbow: cut it bent, more length there)
+      const colOf = (i) => (i - pc.base) % pc.cols, rowOf2 = (i) => Math.floor((i - pc.base) / pc.cols);
+      const outer = S.edges.map((e, k) => (e.piece === pi && e.dir === 'along' && Math.abs(colOf(e.a) - (pc.cols - 1) / 2) < pc.cols / 4 && rowOf2(e.a) < pc.rows * 0.75 ? strain[k] : null)).filter((v) => v !== null);
+      const along = q(outer, 0.75), Sv = P.sleeves[pc.side];
+      if (along > 0.02) { const add = Math.min(0.04, along * Sv.length * 0.6) * damp; Sv.bend = (Sv.bend ?? 0) + add; moves.push(`sleeve ${pc.side} cut more bent: ${cm(Sv.bend)} cm more along its outside (pulled ${pct(along)})`); }
+    }
+    if (pc.kind === 'body' && pc.quarter[1] === 'W' && pc.quarter[0] === 'F') {
+      // (both weapon-side quarters pulled up at the underarm (their outer columns, round the armhole's foot): deepen it)
+      const near = (pi2) => { const p2 = G.pieces[pi2], armRow = M.ARM_ROW; return S.edges.map((e, k) => (e.piece === pi2 && e.dir === 'along' && (e.a - p2.base) % p2.cols >= p2.cols - 3 && Math.abs(Math.floor((e.a - p2.base) / p2.cols) - armRow) <= 3 ? strain[k] : null)).filter((v) => v !== null); };
+      const both = [...near(pi), ...near(G.pieces.findIndex((p2) => p2.quarter === 'BW'))], pull = q(both, 0.75);
+      if (pull > 0.03 && P.armhole > DRAFT.armhole - 0.07) { const d = Math.min(0.02, pull * 0.2) * damp; P.armhole -= d; moves.push(`armhole deepened ${cm(d)} cm (the side pulled up at the underarm, ${pct(pull)})`); }
     }
     console.log(`  ${pc.name}`); for (const r of rows) console.log(`    ${r}`);
   });
-  if (upper.length) { const k = Math.min(0.1, Math.max(...upper) * 0.5) * damp; P.shoulderW *= 1 + k; moves.push(`shoulder widened to ${cm(P.shoulderW)} cm from the centre (tight across the upper chest and back, ${pct(Math.max(...upper))})`); }
   if (!moves.length) { console.log('  fits: nothing to alter'); break; }
   limit();
   if (round < ROUNDS) { console.log('  alterations:'); for (const m of moves) console.log(`    ${m}`); P.moves.push(...moves.map((m) => `round ${round}: ${m}`)); }
@@ -106,6 +114,9 @@ const tris = [];
 G.pieces.forEach((pc) => { for (let r = 0; r < pc.rows - 1; r++) for (let cc = 0; cc < pc.cols - 1; cc++) { const a = pc.base + r * pc.cols + cc; tris.push([a, a + 1, a + pc.cols + 1], [a, a + pc.cols + 1, a + pc.cols]); } });
 const view = (fwd, right, ox, label) => {
   const up = [0, 1, 0], sc = 520, pts = Array.from({ length: G.n }, (_, i) => { const p = [S.x[i * 3] - B.pelvis[0], S.x[i * 3 + 1] - B.pelvis[1], S.x[i * 3 + 2] - B.pelvis[2]]; return [p[0] * right[0] + p[2] * right[2], p[1], p[0] * fwd[0] + p[2] * fwd[2]]; });
+  // (fitted to the frame: 440 × 560 px)
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const k2 = Math.min(420 / (x1 - x0), 560 / (y1 - y0)); for (const p of pts) { p[0] = (p[0] - (x0 + x1) / 2) * k2 / sc; p[1] = (p[1] - y1) * k2 / sc - 0.1; }
   const order = tris.map((t) => [t, (pts[t[0]][2] + pts[t[1]][2] + pts[t[2]][2]) / 3]).sort((a, b) => a[1] - b[1]);
   let g = `<text x="${ox + 10}" y="20" font-size="13">${label}</text>`;
   for (const [t] of order) {
@@ -113,7 +124,7 @@ const view = (fwd, right, ox, label) => {
     const s = (pointStrain[t[0]] + pointStrain[t[1]] + pointStrain[t[2]]) / 3, shade = 0.55 + 0.4 * Math.min(1, Math.abs(nz) * 400);
     const rC = s > 0.02 ? Math.min(255, 200 + s * 1500) : 200, bC = s < -0.01 ? Math.min(255, 200 - s * 1500) : 200;
     const col = `rgb(${Math.round(rC * shade)},${Math.round(200 * shade)},${Math.round(bC * shade)})`;
-    g += `<polygon points="${t.map((i) => `${(ox + 230 + pts[i][0] * sc).toFixed(1)},${(470 - pts[i][1] * sc).toFixed(1)}`).join(' ')}" fill="${col}" stroke="${col}" stroke-width="0.4"/>`;
+    g += `<polygon points="${t.map((i) => `${(ox + 230 + pts[i][0] * sc).toFixed(1)},${(-pts[i][1] * sc).toFixed(1)}`).join(' ')}" fill="${col}" stroke="${col}" stroke-width="0.4"/>`;
   }
   return g;
 };

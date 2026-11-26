@@ -38,7 +38,8 @@ export interface JacketPattern {
   /** the shoulder point: its distance from the centre, along the shoulder, m */
   shoulderW: number;
   /** each sleeve: its round at stations from the cap (0) to the cuff (1), its length, and the cap's ease into the armhole */
-  sleeves: Record<'W' | 'R', { stations: number[]; round: number[]; length: number }>;
+  /** (bend: extra length along the sleeve's outside, through the elbow: a sleeve cut bent, as the weapon arm's is in guard) */
+  sleeves: Record<'W' | 'R', { stations: number[]; round: number[]; length: number; bend?: number }>;
   capEase: number;
   /** what's been done to it, in order */
   moves: string[];
@@ -104,13 +105,20 @@ const interp = (xs: number[], ys: number[], x: number) => {
 export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve'; quarter?: Quarter; side?: 'W' | 'R' }
 /** a stitch: point p sewn to the place between q and q2 (t of the way) */
 export interface Stitch { p: number; q: number; q2: number; t: number }
-export interface Garment { pieces: Piece[]; stitches: Stitch[]; n: number; flat: [number, number][]; at: V[] }
+/** a point held at a place (a cuff under the glove's gauntlet) */
+export interface Pin { p: number; at: V }
+export interface Garment { pieces: Piece[]; stitches: Stitch[]; pins: Pin[]; n: number; flat: [number, number][]; at: V[] }
 
 const ROWS = 32, COLS = 12, SROWS = 30, SCOLS = 18;
+/** the body's grid row the underarm always falls on: the rows below and above it are spaced to the pattern's heights, so
+ * an alteration (a deeper armhole) moves points a little, never a seam's row across at a stroke */
+export const ARM_ROW = 19;
+/** the body grid's row (fractional) at a height above the hem */
+export const rowAt = (P: JacketPattern, h: number) => (h <= P.armhole ? (h / P.armhole) * ARM_ROW : ARM_ROW + ((h - P.armhole) / (P.length - P.armhole)) * (ROWS - 1 - ARM_ROW));
 
 /** the jacket's pieces meshed from the pattern, laid round the body, and what's sewn to what */
 export function meshJacket(P: JacketPattern, B: Body): Garment {
-  const hem = B.pelvis[1] - 0.1, pieces: Piece[] = [], stitches: Stitch[] = [];
+  const hem = B.pelvis[1] - 0.1, pieces: Piece[] = [], stitches: Stitch[] = [], pins: Pin[] = [];
   let n = 0;
   const flatAll: [number, number][] = [], atAll: V[] = [];
   // ── the body's quarters ──
@@ -121,9 +129,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     const Lq = P.lengths?.[qn] ?? P.length;
     for (let r = 0; r < ROWS; r++) {
       // (paper height: the block's below the underarm; above it, stretched to the quarter's own length)
-      const u = r / (ROWS - 1), uArm = P.armhole / P.length;
-      const v = u <= uArm ? u * P.length : P.armhole + ((u - uArm) / (1 - uArm)) * (P.length - P.armhole);
-      const vPaper = u <= uArm ? v : P.armhole + ((u - uArm) / (1 - uArm)) * (Lq - P.armhole);
+      const above = (r - ARM_ROW) / (ROWS - 1 - ARM_ROW);
+      const v = r <= ARM_ROW ? (r / ARM_ROW) * P.armhole : P.armhole + above * (P.length - P.armhole);
+      const vPaper = r <= ARM_ROW ? v : P.armhole + above * (Lq - P.armhole);
       const xl = v > P.length - neckDepth ? P.neckW * Math.sqrt(Math.max(0, 1 - ((P.length - v) / neckDepth) ** 2)) : 0;
       const sArm = Math.max(0, (v - P.armhole) / (P.length - P.armhole));
       const xr = v <= P.armhole ? interp(P.stations, W, v) : P.shoulderW + (wArm - P.shoulderW) * (1 - sArm) ** 3;
@@ -146,11 +154,11 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
   const P4 = Object.fromEntries(pieces.map((p) => [p.quarter, p])) as Record<Quarter, Piece>;
   const at = (p: Piece, r: number, c: number) => p.base + r * p.cols + c;
   const pair = (p: number, q: number) => stitches.push({ p, q, q2: q, t: 0 });
-  const neckRow = (p: Piece, depth: number) => Math.floor(((P.length - depth) / P.length) * (ROWS - 1));
+  const neckRow = (_p: Piece, depth: number) => Math.floor(rowAt(P, P.length - depth));
   // centre front and back (below the neck), side seams (to the underarm), shoulders (the top rows)
   for (let r = 0; r <= neckRow(P4.FW, P.neckFront); r++) pair(at(P4.FW, r, 0), at(P4.FR, r, 0));
   for (let r = 0; r <= neckRow(P4.BW, P.neckBack); r++) pair(at(P4.BW, r, 0), at(P4.BR, r, 0));
-  const armRow = Math.floor((P.armhole / P.length) * (ROWS - 1));
+  const armRow = ARM_ROW;
   for (const s of ['W', 'R'] as const) {
     for (let r = 0; r <= armRow; r++) pair(at(P4[`F${s}`], r, COLS - 1), at(P4[`B${s}`], r, COLS - 1));
     for (let c = 0; c < COLS; c++) pair(at(P4[`F${s}`], ROWS - 1, c), at(P4[`B${s}`], ROWS - 1, c));
@@ -180,12 +188,17 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       for (let c = 0; c < SCOLS; c++) {
         // (the cap's crown carried down into the first rows, fading out where the sleeve is a plain tube)
         const fade = 1 - Math.min(1, (t * S.length) / Math.max(0.04, capH * 1.6));
-        piece.flat.push([(c / (SCOLS - 1)) * rnd, t * S.length + cap[c][1] * fade * fade]);
-        const phi = (c / (SCOLS - 1)) * Math.PI * 2, rad = Math.min(0.09, rnd / (Math.PI * 2) + 0.01);
+        // (the bend: length added along the outside (the crown's side, away from the underarm seam), from the upper arm
+        // through the elbow)
+        const outside = Math.sin((Math.PI * c) / (SCOLS - 1)) ** 2, bendY = (S.bend ?? 0) * outside * Math.max(0, Math.min(1, (t - 0.15) / 0.55));
+        piece.flat.push([(c / (SCOLS - 1)) * rnd, t * S.length + bendY + cap[c][1] * fade * fade]);
+        const phi = (c / (SCOLS - 1)) * Math.PI * 2, rad = r === SROWS - 1 ? 0.045 : Math.min(0.09, rnd / (Math.PI * 2) + 0.01);
         piece.at.push(madd(madd(p, down, Math.cos(phi) * rad), side2, Math.sin(phi) * rad));
       }
     }
     pieces.push(piece); flatAll.push(...piece.flat); atAll.push(...piece.at);
+    // the cuff, held round the wrist under the glove's gauntlet (where the sleeve's been laid: its last ring)
+    for (let c = 0; c < SCOLS - 1; c++) pins.push({ p: n + (SROWS - 1) * SCOLS + c, at: piece.at[(SROWS - 1) * SCOLS + c] });
     // the underarm seam; the cap round the armhole by length, turned so the sleeve doesn't twist
     for (let r = 0; r < SROWS; r++) pair(n + r * SCOLS + SCOLS - 1, n + r * SCOLS);
     const quarterway = atAll[n + Math.round(SCOLS / 4)], nearFront = len(sub(quarterway, atAll[loop[Math.floor(loop.length / 4)]])) < len(sub(quarterway, atAll[loop[Math.floor((3 * loop.length) / 4)]]));
@@ -197,5 +210,5 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     }
     n += SROWS * SCOLS;
   }
-  return { pieces, stitches, n, flat: flatAll, at: atAll };
+  return { pieces, stitches, pins, n, flat: flatAll, at: atAll };
 }
