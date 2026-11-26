@@ -278,7 +278,10 @@ export function buildAthlete(): Athlete {
       const hem = 0.0035 * Math.exp(-((h + 0.081) ** 2) / 0.000022);
       const dr = waist + lower + reach + hem;
       return [ru + dr, rw * (front < 0 ? 1 + full * 8 * front ** 2 : 1 - 0.04 * front ** 2) + dr];
-    }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) + 0.013*Math.cos(a)*Math.exp(-(((h-0.43)/0.095)**2)) };
+    }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) + 0.013*Math.cos(a)*Math.exp(-(((h-0.43)/0.095)**2))
+      // (the hem cut up over each thigh, the hip line's way, so the legs come out of the hips, and low between them where
+      // the crotch strap holds it)
+      + 0.05 * Math.cos(a) ** 2 * (1 - blend(h, -0.09, 0.02)) };
   });
   loft(m, torsoRings, {
     fold: { driver: 4, relief: (row,a) => {
@@ -365,15 +368,20 @@ export function buildAthlete(): Athlete {
       const { p } = pa.at(s), tangent = norm(sub(pa.at(Math.min(1, s+0.045)).p, pa.at(Math.max(0, s-0.045)).p));
       const [u, w] = axesAbout(tangent, pole);
       // (the kneecap at the front of the knee; the calf full at the back; breeches loose above the band)
-      const kneeK = Math.max(0, 1 - Math.abs(s - sK) / 0.06), calfK = Math.max(0, 1 - Math.abs(s - (sK + 0.19)) / 0.15);
+      const kneeK = Math.max(0, 1 - Math.abs(s - (sK + 0.01)) / 0.05), calfK = Math.max(0, 1 - Math.abs(s - (sK + 0.17)) / 0.15);
       // (fitted: about 62 cm round the upper thigh, 46 above the knee, 42 at it; under the sock a calf that fills out
       // below the band to about 39 and narrows to the ankle. Measured by devtools/piste-proportions.mjs)
-      const r = tone === TONE.breeches ? prof([[0, 0.11], [0.3, 0.097], [sK - 0.08, 0.072], [sK, 0.064], [band, 0.06]], s) : prof([[band, 0.058], [band + 0.05, 0.059], [sK + 0.19, 0.061], [0.85, 0.043], [1, 0.039]], s);
+      // (the knee is found from in front by the kneecap standing out of a leg that's narrowest just above and below
+      // it, not by the band's edge; the breeches gathered in under it to the band)
+      const r = tone === TONE.breeches ? prof([[0, 0.11], [0.3, 0.097], [sK - 0.1, 0.071], [sK - 0.03, 0.064], [sK + 0.015, 0.066], [band, 0.055]], s) : prof([[band, 0.054], [band + 0.04, 0.054], [sK + 0.17, 0.052], [0.8, 0.043], [1, 0.039]], s);
       rings.push({ c: p, u, w, r: (a) => { const ca = Math.cos(a);
         const dr = tone === TONE.breeches ? (0.007 * pleat(s, sK-0.08+0.052*ca, 0.022)
           + 0.005 * pleat(s, sK-0.015-0.029*Math.sin(a), 0.017)
           + 0.008 * pleat(s, 0.16+0.09*ca, 0.032)) : 0;
-        return [r * (1 + (ca > 0 ? 0.14 * kneeK * ca : 0.26 * calfK * -ca)) + dr, r * 0.94 + dr]; } });
+        // (the kneecap forward; the shin straight in front and the calf full behind it and, less, at either side, so its
+        // curve shows from the side and from in front)
+        const side = Math.abs(Math.sin(a));
+        return [r * (1 + (ca > 0 ? 0.22 * kneeK * ca ** 2 : 0.6 * calfK * -ca)) + dr, r * (0.94 + 0.16 * calfK * side) + dr]; } });
       mats.push(MAT.fabric); tones.push(tone);
     };
     for (let i = 0; i < N; i++) { const s = (i / (N - 1)) * band; add1(s, TONE.breeches); }
