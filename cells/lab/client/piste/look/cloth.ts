@@ -185,8 +185,11 @@ export class GpuCloth {
   private states = new Map<object, State>();
   private vao: WebGLVertexArrayObject;
   private fbs = new Map<string, WebGLFramebuffer>();
-  /** ms of CPU spent issuing last frame's cloth passes (the GPU's own time isn't visible from here) */
-  issueMs = 0;
+  /** ms of CPU spent issuing last frame's cloth passes (the GPU's own time isn't visible from here; iOS rounds this to
+   * whole ms), and how many render passes the cloth took last frame, for both fencers */
+  issueMs = 0; passes = 0; private passFrame = 0; private passCount = 0;
+  /** a stress dial (`?clothx=4`): this many times the substeps, to find where a phone's frame rate gives */
+  stress = 1;
 
   static create(gl: WebGL2RenderingContext, athlete: Athlete): GpuCloth | null {
     if (!gl.getExtension('EXT_color_buffer_float') || !athlete.pieces?.length) return null;
@@ -251,7 +254,7 @@ export class GpuCloth {
       this.pass('init', this.fb([st.x, st.p]), { A: st.a[1].tex[0] });
       this.pass('anchor', st.a[0].fb, { Bind: this.stat.bind, BindN: this.stat.bindN, Joints: this.stat.jt, Weights: this.stat.wt }, (l) => gl.uniformMatrix4fv(l.bones, false, bones));
     } else {
-      const n = Math.min(CLOTH.maxSteps, Math.max(1, Math.ceil(dt / CLOTH.step))), h = dt / n;
+      const n = Math.min(CLOTH.maxSteps * this.stress, Math.max(1, Math.ceil(dt * this.stress / CLOTH.step))), h = dt / n;
       const A0 = st.a[0].tex[0], A1 = st.a[1].tex[0], N0 = st.a[0].tex[1], N1 = st.a[1].tex[1];
       for (let k = 0; k < n; k++) {
         const ratio = h / st.h; st.h = h;
@@ -280,6 +283,10 @@ export class GpuCloth {
 
   private pass(name: string, fb: WebGLFramebuffer, tex: Record<string, WebGLTexture>, set?: (l: Record<string, WebGLUniformLocation | null>) => void) {
     const gl = this.gl, l = this.loc[name];
+    // (counted per animation frame: both fencers' passes together)
+    const frame = Math.floor(performance.now() / 16.6);
+    if (frame !== this.passFrame) { this.passes = this.passCount; this.passCount = 0; this.passFrame = frame; }
+    this.passCount++;
     gl.useProgram(this.progs[name]);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.uniform1i(l.W, this.W); gl.uniform1i(l.N, this.N);

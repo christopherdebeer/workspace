@@ -65,7 +65,7 @@ export class Renderer {
   cloth: GpuCloth | null = null;
   private clothShaders = false;
 
-  constructor(readonly canvas: HTMLCanvasElement, opts: { cloth?: boolean } = {}) {
+  constructor(readonly canvas: HTMLCanvasElement, opts: { cloth?: boolean; clothStress?: number } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL 2 is needed');
     this.gl = gl;
@@ -104,6 +104,7 @@ export class Renderer {
     this.athlete = buildAthlete();
     if (this.clothShaders) {
       this.cloth = GpuCloth.create(gl, this.athlete);
+      if (this.cloth) this.cloth.stress = Math.max(1, Math.min(16, Math.round(opts.clothStress ?? 1)));
       for (const [pass, U] of [[this.skin, this.uk], [this.skinShade, this.uks]] as const) {
         gl.useProgram(pass);
         for (const k of ['clothX', 'clothOn', 'clothW', 'clothPiece']) U[k] = gl.getUniformLocation(pass, k);
