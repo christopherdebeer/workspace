@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:10d91d2ca7f90316603a252e6264713c38e130bbe40bd44832462a2c596a872e",
-  "syncedAt": "2026-11-26T12:08:48.207Z",
+  "treeVersion": "tree:477fb3381508c15a2f2d61381f3bef3e187ee8f3dd287231423b20661d70f80c",
+  "syncedAt": "2026-11-26T12:13:49.553Z",
   "files": {
     "README.md": "sha256:0bf552fbd99c966b00484b4d831c42db1b25a8420e2332a20e39db53d4747e0b",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -284,7 +284,7 @@
     "client/piste/look/salle.ts": "sha256:5b6e61752f8755ad8eea6d8bd17ba9bcab1bea05c27cda011e8e6fbcbf306b53",
     "client/piste/look/shaders.ts": "sha256:f0ae181d043e5951257bc4789412ef615b4798a7907edbf0986f49f1f94de3f6",
     "client/piste/look/tailor.ts": "sha256:c844cf372a931b4de2300a02e1919cd2ad3a01c693038f3105bacd6e3c7f6f60",
-    "client/piste/main.ts": "sha256:cc5c17ba6f0b9a04fef3c0351fd25bf2a7b4cf89caf78975700a330bb42b9ce9",
+    "client/piste/main.ts": "sha256:4e40d915983c5ec7cdc2ea0495162f0b06d381604dcc083933ae1b3976c6cd21",
     "client/piste/motion.ts": "sha256:d76ba85ffeccb29a22a90f66d523888ec30755846bd22828b5e110ffb938de3f",
     "client/piste/replay.ts": "sha256:fa4226219b7fd4ae798d0262db8a28a88869d6f5b0c80b7945c53b703bff9453",
     "client/piste/time.ts": "sha256:548505d75ff1ba9a77e500a30ce87e717f7eb1404d2aec0e62994e7ea2b09b9d",
@@ -1402,7 +1402,7 @@
     "static/markovs/s-vig5.png": "sha256:e354fc6bdd6bcceee6e5a3c3b92c460615a1aa22285db48dc0ef8e2a7b73e47b",
     "static/mistwood.html": "sha256:e96d5003b4130e410f1834b590ee1652028e44812de1dd34a1e2765f1b12d672",
     "static/mistwood.md": "sha256:08f968c2c7ac392b66214821978628fe935371623cb16253613280db960335dd",
-    "static/piste.html": "sha256:1822b7bf6c235a33b1cee7a0443fbd20cf5d70bceaa32be90c7434382dc5b669",
+    "static/piste.html": "sha256:41ea63bb6dd9a5bbcc8391b3748c8aa071903a3f5b001d770e848e4fa7105f57",
     "static/piste.md": "sha256:1bf63935da1d8e6d4f6a5f39c7860e4198e033f5f65d6626523f26a0bc491498",
     "static/piste/fit-comparison.jpg": "sha256:5bae0235f534d5bc25527f2be54f39bee83239b0956c044e4e9574e2474d3746",
     "static/piste/kit-relief.webp": "sha256:0d98d386fc2828b578cd5d54150d4c2fc1da1157f7788c24c6a20bdca7bdcc5f",
