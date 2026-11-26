@@ -107,7 +107,10 @@ export interface Piece { name: string; rows: number; cols: number; flat: [number
 export interface Stitch { p: number; q: number; q2: number; t: number }
 /** a point held at a place (a cuff under the glove's gauntlet) */
 export interface Pin { p: number; at: V }
-export interface Garment { pieces: Piece[]; stitches: Stitch[]; pins: Pin[]; n: number; flat: [number, number][]; at: V[] }
+/** a point kept no further than a length from a place (the crotch strap: the hem in front and behind, held to where the
+ * strap passes under the crotch) */
+export interface Tie { p: number; at: V; len: number }
+export interface Garment { pieces: Piece[]; stitches: Stitch[]; pins: Pin[]; ties: Tie[]; n: number; flat: [number, number][]; at: V[] }
 
 const ROWS = 32, COLS = 12, SROWS = 30, SCOLS = 18;
 /** the body's grid row the underarm always falls on: the rows below and above it are spaced to the pattern's heights, so
@@ -210,5 +213,13 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     }
     n += SROWS * SCOLS;
   }
-  return { pieces, stitches, pins, n, flat: flatAll, at: atAll };
+  // the crotch strap: the centre front's hem to the centre back's, under the crotch (a little below the hem between the
+  // legs), no longer than that
+  const ties: Tie[] = [];
+  {
+    // (the strap's width: the centre's hem points and two either side, front and back)
+    const under: V = [B.pelvis[0], hem - 0.05, B.pelvis[2]];
+    for (const qn of QUARTERS) for (let cc = 0; cc < 3; cc++) { const p = P4[qn].base + cc; ties.push({ p, at: under, len: len(sub(atAll[p], under)) + 0.01 * cc }); }
+  }
+  return { pieces, stitches, pins, ties, n, flat: flatAll, at: atAll };
 }

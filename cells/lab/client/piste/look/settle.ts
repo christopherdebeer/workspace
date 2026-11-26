@@ -27,14 +27,22 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
   // (the jacket's body goes round the trunk; its sleeves round the arms too)
   const isSleeve = new Uint8Array(n); G.pieces.forEach((pc) => { if (pc.kind === 'sleeve') isSleeve.fill(1, pc.base, pc.base + pc.rows * pc.cols); });
   const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 };
+  const STEP = 0.005;
   const h = 1 / 240, steps = Math.round((o.seconds ?? 6) / h), thick = o.thick ?? 0.004;
   const P = (i: number): V => [x[i * 3], x[i * 3 + 1], x[i * 3 + 2]];
   for (let s = 0; s < steps; s++) {
-    const seam = Math.min(1, (s * h) / 1.0);
+    // (the seams drawn closed gently, over two and a half seconds: pulled shut at once they fling the cloth)
+    const seam = Math.min(1, (s * h) / 2.5);
     // inertia and gravity (damped hard: it's settling, not moving)
     for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++) {
       const j = i * 3 + a, v = (x[j] - prev[j]) * 0.9;
       prev[j] = x[j]; x[j] += v + (a === 1 ? -9.81 * h * h : 0);
+    }
+    // (no point moves more than 5 mm a step, from where it was: much less than the thinnest part of the body, so the
+    // cloth can't pass through it between one step and the next)
+    for (let i = 0; i < n; i++) {
+      const j = i * 3, dx = x[j] - prev[j], dy = x[j + 1] - prev[j + 1], dz = x[j + 2] - prev[j + 2], d = Math.hypot(dx, dy, dz);
+      if (d > STEP) { const m = STEP / d; x[j] = prev[j] + dx * m; x[j + 1] = prev[j + 1] + dy * m; x[j + 2] = prev[j + 2] + dz * m; }
     }
     // (passes enough for stiff cloth to come to its lengths: off line, there's time)
     for (let it = 0; it < (o.passes ?? 10); it++) {
@@ -51,6 +59,11 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
           x[p + a] += d; x[q + a] -= d * (1 - st.t); x[q2 + a] -= d * st.t;
         }
       }
+      // (a tie pulls in only when it's taut: the crotch strap holding the hem to where it passes under the crotch)
+      for (const tie of G.ties ?? []) {
+        const a = tie.p * 3, dx = x[a] - tie.at[0], dy = x[a + 1] - tie.at[1], dz = x[a + 2] - tie.at[2], l = Math.hypot(dx, dy, dz);
+        if (l > tie.len) { const m = tie.len / l; x[a] = tie.at[0] + dx * m; x[a + 1] = tie.at[1] + dy * m; x[a + 2] = tie.at[2] + dz * m; }
+      }
       for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
       // the body: out of every capsule, a little off it
       for (let i = 0; i < n; i++) {
@@ -60,7 +73,11 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
           const t = Math.max(0, Math.min(1, (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / Math.max(1e-12, ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2)));
           const cx = c.a[0] + ab[0] * t, cy = c.a[1] + ab[1] * t, cz = c.a[2] + ab[2] * t, R = c.ra + (c.rb - c.ra) * t + thick;
           const dx = p[0] - cx, dy = p[1] - cy, dz = p[2] - cz, d = Math.hypot(dx, dy, dz);
-          if (d < R && d > 1e-9) { const m = R / d; p[0] = cx + dx * m; p[1] = cy + dy * m; p[2] = cz + dz * m; }
+          if (d < R && d > 1e-9) {
+            const m = R / d; p[0] = cx + dx * m; p[1] = cy + dy * m; p[2] = cz + dz * m;
+            // (friction: in contact, most of this step's sliding along the body is taken back)
+            const j = i * 3; prev[j] = prev[j] + (p[0] - prev[j]) * 0.3; prev[j + 1] = prev[j + 1] + (p[1] - prev[j + 1]) * 0.3; prev[j + 2] = prev[j + 2] + (p[2] - prev[j + 2]) * 0.3;
+          }
         }
         x[i * 3] = p[0]; x[i * 3 + 1] = p[1]; x[i * 3 + 2] = p[2];
       }

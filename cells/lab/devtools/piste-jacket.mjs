@@ -29,6 +29,8 @@ const EASE = { body: [0.008, 0.03], sleeve: [0.01, 0.035] };
 // (the loop kept honest: each alteration damped, no number further than 25 % from the draft, and a round that makes the
 // fit worse undone, the damping halved)
 const DRAFT = structuredClone(P);
+const PER_ROUND = 3, tried = new Set();
+let lastKeys = [];
 let G, S, damp = 0.6, best = { score: Infinity, P: structuredClone(P), G: null, S: null };
 const limit = () => {
   for (const qq of M.QUARTERS) P.widths[qq] = P.widths[qq].map((w, k) => Math.max(DRAFT.widths[qq][k] * 0.75, Math.min(DRAFT.widths[qq][k] * 1.25, w)));
@@ -45,16 +47,22 @@ for (let round = 1; round <= ROUNDS; round++) {
   const isSl = (i) => G.pieces.some((pc) => pc.kind === 'sleeve' && i >= pc.base && i < pc.base + pc.rows * pc.cols);
   const off = Array.from({ length: G.n }, (_, i) => M.clearance(X(i), isSl(i) ? B.sleeveCaps : B.bodyCaps));
   const gaps = G.stitches.map((s) => Math.hypot(...[0, 1, 2].map((k) => S.x[s.p * 3 + k] - (S.x[s.q * 3 + k] * (1 - s.t) + S.x[s.q2 * 3 + k] * s.t))));
-  const score = q(strain.filter((_, k) => S.edges[k].dir === 'across' || S.edges[k].dir === 'along'), 0.9) + 0.5 * q(gaps, 0.9);
+  // (the score: stretch, seams, and a hem riding up (a jacket that rides up doesn't fit), each in comparable terms)
+  const hemRise = G.pieces.filter((pc) => pc.kind === 'body').map((pc) => Array.from({ length: pc.cols }, (_, cc) => S.x[(pc.base + cc) * 3 + 1] - G.at[pc.base + cc][1]).reduce((a2, b2) => a2 + b2) / pc.cols);
+  const score = q(strain.filter((_, k) => S.edges[k].dir === 'across' || S.edges[k].dir === 'along'), 0.9) + 0.5 * q(gaps, 0.9) + 0.3 * Math.max(0, ...hemRise);
   if (score > best.score) {
     console.log(`\n── round ${round}: worse (${pct(score)} against ${pct(best.score)}: stretch p90 ${pct(q(strain, 0.9))}, seams p90 ${cm(q(gaps, 0.9))} cm, worst ${cm(Math.max(...gaps))} cm); undone, alterations halved`);
-    Object.assign(P, structuredClone(best.P)); damp *= 0.5; G = best.G; S = best.S;
-    if (damp < 0.1) break; continue;
+    // (undone: those alterations aren't tried again; the next worst are)
+    Object.assign(P, structuredClone(best.P)); G = best.G; S = best.S;
+    for (const k2 of lastKeys) tried.add(k2);
+    console.log(`  not again: ${lastKeys.join(', ')}`);
+    continue;
   }
   best = { score, P: structuredClone(P), G, S };
   console.log(`\n── round ${round} (${((Date.now() - t0) / 1000).toFixed(1)} s) ──  stretch p50 ${pct(q(strain, 0.5))} p90 ${pct(q(strain, 0.9))} p99 ${pct(q(strain, 0.99))} · seams: worst gap ${cm(Math.max(...gaps))} cm, p90 ${cm(q(gaps, 0.9))} · inside the body: ${off.filter((d) => d < -0.002).length} points`);
   // by piece and band: across and along stretch, and the ease
-  const moves = [], upper = [];
+  const moves = [], upper = [], candidates = [];
+  const propose = (sev, family, key, apply) => candidates.push({ sev, family, key, apply });
   G.pieces.forEach((pc, pi) => {
     const bands = pc.kind === 'body' ? P.stations.length : P.sleeves[pc.side].stations.length;
     const rows = [];
@@ -71,16 +79,18 @@ for (let round = 1; round <= ROUNDS; round++) {
       const [lo, hi] = EASE[pc.kind];
       if (pc.kind === 'body') {
         const W = P.widths[pc.quarter];
-        if (frac > 0.85 && along > 0.02) { const k = Math.min(0.15, along * 0.8) * damp; P.lengths[pc.quarter] += (P.lengths[pc.quarter] - P.armhole) * k; moves.push(`${pc.quarter} lengthened over the shoulder to ${cm(P.lengths[pc.quarter])} cm (pulled ${pct(along)})`); }
+        if (frac > 0.85 && along > 0.02) { const qn = pc.quarter; propose(along, `${qn} length`, `${qn} top`, () => { const k = Math.min(0.15, along * 0.8) * damp; P.lengths[qn] += (P.lengths[qn] - P.armhole) * k; return `${qn} lengthened over the shoulder to ${cm(P.lengths[qn])} cm (pulled ${pct(along)})`; }); }
         // (above the underarm, tight across: the armhole scooped too far in; widen the shoulder toward its point)
         if (frac * P.length > P.armhole + 0.02) { if (across > 0.02 && frac < 0.95) upper.push(across); continue; }
-        if (across > 0.02) { const k = Math.min(0.12, across * 0.9) * damp; W[b] *= 1 + k; moves.push(`${pc.quarter} let out ${cm(W[b] * k / (1 + k))} cm at ${(frac * 100).toFixed(0)}% (tight ${pct(across)})`); }
-        else if (e50 > hi && across < 0.005) { const d = Math.min(0.02, (e50 - (lo + hi) / 2) * (Math.PI / 2)) * damp; W[b] -= d; moves.push(`${pc.quarter} taken in ${cm(d)} cm at ${(frac * 100).toFixed(0)}% (ease ${cm(e50)} cm)`); }
+        const qn = pc.quarter, bb = b, at2 = `${(frac * 100).toFixed(0)}%`;
+        if (across > 0.02) propose(across, `${qn} width`, `${qn} width ${bb}`, () => { const k = Math.min(0.12, across * 0.9) * damp; W[bb] *= 1 + k; return `${qn} let out ${cm(W[bb] * k / (1 + k))} cm at ${at2} (tight ${pct(across)})`; });
+        else if (e50 > hi && across < 0.005) propose((e50 - hi) * 0.3, `${qn} width`, `${qn} width ${bb}`, () => { const d = Math.min(0.02, (e50 - (lo + hi) / 2) * (Math.PI / 2)) * damp; W[bb] -= d; return `${qn} taken in ${cm(d)} cm at ${at2} (ease ${cm(e50)} cm)`; });
       } else {
         const Sv = P.sleeves[pc.side];
         if (b === 0) continue;   // (the cap's round is the armhole's)
-        if (across > 0.02) { const k = Math.min(0.12, across * 0.9) * damp; Sv.round[b] *= 1 + k; moves.push(`sleeve ${pc.side} let out ${cm(Sv.round[b] * k / (1 + k))} cm round at ${(frac * 100).toFixed(0)}%`); }
-        else if (e50 > hi && across < 0.005) { const d = Math.min(0.03, (e50 - (lo + hi) / 2) * Math.PI * 2) * damp; Sv.round[b] -= d; moves.push(`sleeve ${pc.side} taken in ${cm(d)} cm round at ${(frac * 100).toFixed(0)}% (ease ${cm(e50)} cm)`); }
+        const sd = pc.side, bb = b, at2 = `${(frac * 100).toFixed(0)}%`;
+        if (across > 0.02) propose(across, `sleeve ${sd} round`, `sleeve ${sd} round ${bb}`, () => { const k = Math.min(0.12, across * 0.9) * damp; Sv.round[bb] *= 1 + k; return `sleeve ${sd} let out ${cm(Sv.round[bb] * k / (1 + k))} cm round at ${at2} (tight ${pct(across)})`; });
+        else if (e50 > hi && across < 0.005) propose((e50 - hi) * 0.3, `sleeve ${sd} round`, `sleeve ${sd} round ${bb}`, () => { const d = Math.min(0.03, (e50 - (lo + hi) / 2) * Math.PI * 2) * damp; Sv.round[bb] -= d; return `sleeve ${sd} taken in ${cm(d)} cm round at ${at2} (ease ${cm(e50)} cm)`; });
       }
     }
     if (pc.kind === 'sleeve') {
@@ -88,19 +98,30 @@ for (let round = 1; round <= ROUNDS; round++) {
       const colOf = (i) => (i - pc.base) % pc.cols, rowOf2 = (i) => Math.floor((i - pc.base) / pc.cols);
       const outer = S.edges.map((e, k) => (e.piece === pi && e.dir === 'along' && Math.abs(colOf(e.a) - (pc.cols - 1) / 2) < pc.cols / 4 && rowOf2(e.a) < pc.rows * 0.75 ? strain[k] : null)).filter((v) => v !== null);
       const along = q(outer, 0.75), Sv = P.sleeves[pc.side];
-      if (along > 0.02) { const add = Math.min(0.04, along * Sv.length * 0.6) * damp; Sv.bend = (Sv.bend ?? 0) + add; moves.push(`sleeve ${pc.side} cut more bent: ${cm(Sv.bend)} cm more along its outside (pulled ${pct(along)})`); }
+      if (along > 0.02) { const sd = pc.side; propose(along, `sleeve ${sd} bend`, `sleeve ${sd} bend`, () => { const add = Math.min(0.04, along * Sv.length * 0.6) * damp; Sv.bend = (Sv.bend ?? 0) + add; return `sleeve ${sd} cut more bent: ${cm(Sv.bend)} cm more along its outside (pulled ${pct(along)})`; }); }
     }
     if (pc.kind === 'body' && pc.quarter[1] === 'W' && pc.quarter[0] === 'F') {
       // (both weapon-side quarters pulled up at the underarm (their outer columns, round the armhole's foot): deepen it)
       const near = (pi2) => { const p2 = G.pieces[pi2], armRow = M.ARM_ROW; return S.edges.map((e, k) => (e.piece === pi2 && e.dir === 'along' && (e.a - p2.base) % p2.cols >= p2.cols - 3 && Math.abs(Math.floor((e.a - p2.base) / p2.cols) - armRow) <= 3 ? strain[k] : null)).filter((v) => v !== null); };
       const both = [...near(pi), ...near(G.pieces.findIndex((p2) => p2.quarter === 'BW'))], pull = q(both, 0.75);
-      if (pull > 0.03 && P.armhole > DRAFT.armhole - 0.07) { const d = Math.min(0.02, pull * 0.2) * damp; P.armhole -= d; moves.push(`armhole deepened ${cm(d)} cm (the side pulled up at the underarm, ${pct(pull)})`); }
+      if (pull > 0.03 && P.armhole > DRAFT.armhole - 0.07) propose(pull, 'armhole', 'armhole', () => { const d = Math.min(0.02, pull * 0.2) * damp; P.armhole -= d; return `armhole deepened ${cm(d)} cm (the side pulled up at the underarm, ${pct(pull)})`; });
     }
-    console.log(`  ${pc.name}`); for (const r of rows) console.log(`    ${r}`);
+    // (a hem that's ridden up: the quarter hangs from the shoulder too short to reach it; more length over the shoulder)
+    let rise = NaN;
+    if (pc.kind === 'body') {
+      rise = Array.from({ length: pc.cols }, (_, cc) => S.x[(pc.base + cc) * 3 + 1] - G.at[pc.base + cc][1]).reduce((a, b) => a + b) / pc.cols;
+      if (rise > 0.03) { const qn = pc.quarter, r2 = rise; propose(rise * 0.5, `${qn} length`, `${qn} hem`, () => { P.lengths[qn] += r2 * damp; return `${qn} lengthened ${cm(r2 * damp)} cm (its hem rode up ${cm(r2)} cm)`; }); }
+    }
+    console.log(`  ${pc.name}${Number.isNaN(rise) ? '' : `  (hem ${rise > 0 ? 'up' : 'down'} ${cm(Math.abs(rise))} cm)`}`); for (const r of rows) console.log(`    ${r}`);
   });
-  if (!moves.length) { console.log('  fits: nothing to alter'); break; }
+  // the worst few, one to each part of the garment, not one tried and undone before
+  const chosen = [], families = new Set();
+  for (const cnd of candidates.sort((a2, b2) => b2.sev - a2.sev)) { if (chosen.length >= PER_ROUND) break; if (families.has(cnd.family) || tried.has(cnd.key)) continue; families.add(cnd.family); chosen.push(cnd); }
+  if (!chosen.length) { console.log('  fits: nothing more to alter'); break; }
+  for (const cnd of chosen) moves.push(cnd.apply());
+  lastKeys = chosen.map((cnd) => cnd.key);
   limit();
-  if (round < ROUNDS) { console.log('  alterations:'); for (const m of moves) console.log(`    ${m}`); P.moves.push(...moves.map((m) => `round ${round}: ${m}`)); }
+  if (round < ROUNDS) { console.log(`  alterations (the worst ${chosen.length} of ${candidates.length}):`); for (const m of moves) console.log(`    ${m}`); P.moves.push(...moves.map((m) => `round ${round}: ${m}`)); }
 }
 
 // the pattern, and pictures: the settled jacket from in front and the weapon side, coloured by stretch (red tight,
