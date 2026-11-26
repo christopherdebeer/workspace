@@ -7,7 +7,7 @@ import { checks } from './harness.mjs';
 const lab = new URL('../client/piste/', import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './box'; export * from './intent'; export * from './v3'; export * from './blade'; export * from './contact'; export * from './lessons'; export * from './replay'; export * from './time'; export * from './fencer'; export * from './ai'; export { GAIN } from './input';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
-const { REACH_GAIN, GUARD_GAIN } = M;
+const { REACH_GAIN, GUARD_GAIN, PISTE } = M;
 const { Bout, EPEE, FOIL, Opponent, SPARRING, LEVELS, Box, award, idle, LESSONS, LessonRunner, Recorder, cloneBout, TimeDirector, aimAt, add, lerp, reachFor, openTarget, TARGETS, toLocal, norm, sub, FATIGUE, Dummy } = M;
 const c = checks();
 const DT = 1 / 60;
@@ -343,6 +343,24 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
     c.ok(`the master against ${name}: scores at least half as often as it`, tally.them >= tally.you * 0.5, tally);
     c.ok(`…and it costs the arm (mean fatigue over 0.25)`, tally.fatigue / tally.n > 0.25, tally.fatigue / tally.n);
   }
+}
+
+// the ceremony: before the bout they salute and come on guard; after a touch they walk back to their lines (no jump),
+// and are on them, on guard, when the referee says en garde again
+{
+  const b = new Bout({ weapon: EPEE, to: 5, ceremony: true, seed: 3 }), ai = [new Opponent(b, 0, SPARRING, 11), new Opponent(b, 1, SPARRING, 12)];
+  let allez = [], halted = null, jump = 0, last = b.fencers.map((f) => f.s), interlude = 0, readyAgain = null, phases = new Set();
+  for (let s = 0; s < 60 && readyAgain === null; s += DT) {
+    for (const k of [0, 1]) b.fencers[k].intent = { ...ai[k].intent(DT) };
+    b.advance(DT); phases.add(b.phase);
+    for (const e of b.drain()) { if (e.type === 'allez') allez.push(e.t); if (e.type === 'halt' && halted === null) halted = e.t; if (e.type === 'reset' && halted !== null && readyAgain === null) readyAgain = b.fencers.map((f) => f.s); }
+    if (b.phase === 'interlude') { interlude += DT; b.fencers.forEach((f, k) => { jump = Math.max(jump, Math.abs(f.s - last[k])); }); }
+    last = b.fencers.map((f) => f.s);
+  }
+  c.ok('ceremony: the salute before the bout, then allez (3.5–5.5 s in)', allez[0] > 3.5 && allez[0] < 5.5, allez[0]);
+  c.ok('ceremony: after a touch they walk back to their lines (no jump: < 3 cm a frame)', halted !== null && interlude > 1 && jump < 0.03, { halted, interlude, jump });
+  c.ok('ceremony: on their lines, on guard, for en garde (within 3 cm)', readyAgain && Math.abs(readyAgain[0] + PISTE.garde) < 0.03 && Math.abs(readyAgain[1] - PISTE.garde) < 0.03, readyAgain);
+  c.ok('ceremony: …and it takes under 12 s', interlude < 12, interlude);
 }
 
 // two stand-ins fence a bout to five

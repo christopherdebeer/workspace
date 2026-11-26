@@ -136,6 +136,10 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 - **The numbers are estimates.** The FIE gives the blade's length, the guard, the tip's spring and the lockout. The blade's stiffness, the arm's strength and the hand's mass are estimated, and left as dials to be measured.
 
 
+## Between touches
+
+A bout has its ceremony (`ceremony.ts`; `ceremony=0` turns it off). Before it, the fencers stand at their lines, shake an arm out, salute each other (the guard up before the face, the blade upright, swept out toward the opponent, lowered) and come on guard for "en garde". After a touch they aren't put back on their lines. They come out of the lunge, stand up out of guard, lower their points to the floor and walk back. The opponent turns its back to walk if it's far, while you step back facing them, so your view stays on them. One or both shake the weapon arm out on the way. They take a moment on the line, then come on guard, and the referee says en garde. After the bout they stand and salute. Standing, walking and the arm's gestures are a posture layer on the fencer (`Scene` in `fencer.ts`), scripted by the bout's clock and a seed, so a replay shows the same walk. The body's own motion (breath, sway, the rear arm's swing) runs through all of it.
+
 ## The look
 
 ![Matched guard, lunge and first-person recovery](piste/fit-comparison.jpg)

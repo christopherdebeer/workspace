@@ -50,6 +50,25 @@ export const FATIGUE = { from: 0.55, tire: 9, rest: 5, weak: 0.55, tremor: 0.018
 
 type Act = { kind: 'advance' | 'retreat' | 'lunge' | 'recover'; t: number; dur: number; from: number };
 
+/**
+ * What the fencer does when not fencing (ceremony.ts sets it): out of guard and standing, walking back to a line, the
+ * weapon arm lowered, shaking out, saluting. While a scene is set the thumbs and the AI are not listened to.
+ */
+export interface Scene {
+  /** 0 en garde .. 1 standing at ease */
+  stand: number;
+  /** where to walk to (the fencer's origin along the piste, world x), or null to stay where they are */
+  walkTo: number | null;
+  /** turned away about the vertical, rad (0: facing the opponent; π: walking away to their line) */
+  turn: number;
+  /** the weapon arm: in guard, lowered with the point down, shaking out the hand, the salute */
+  arm: 'guard' | 'down' | 'shake' | 'salute';
+  /** seconds since the arm began it */
+  armT: number;
+}
+/** standing and walking: the pelvis's rise standing, the feet's half-spacing, a stride, the walking speed */
+export const STANDING = { rise: 0.11, feet: 0.13, stride: 0.62, speed: 1.15 };
+
 export interface Capsule { a: V; b: V; ra: number; rb: number; part: Part }
 
 export class Fencer {
@@ -62,6 +81,10 @@ export class Fencer {
   act: Act | null = null;
   queued: 'advance' | 'retreat' | null = null;
   intent: Intent = idle();
+  /** not fencing: what the ceremony has the body do (see Scene), or null */
+  scene: Scene | null = null;
+  /** (how far it's stood up, turned away, into its walk, and how much the arm is doing the scene's rather than the guard's) */
+  private standK = 0; private yaw = 0; private gait = 0; private walkV = 0; private armK = 0;
   readonly blade: Blade;
   frame!: Frame;
   /** the body this step, for the blade to meet and the eye to draw */
@@ -98,6 +121,7 @@ export class Fencer {
     this.s = s; this.lunge = 0; this.front = BODY.stance / 2; this.back = -BODY.stance / 2; this.act = null; this.queued = null;
     this.ext = this.hx = this.hy = this.px = this.py = this.roll = 0;
     this.fatigue = 0;
+    this.standK = this.yaw = this.gait = this.walkV = this.armK = 0;
     this.motion.reset();
     this.blade.strength = 1;
     this.intent = idle();
@@ -148,10 +172,11 @@ export class Fencer {
 
   /** the body's pose from the feet, and the arm reaching for where the weapon is */
   pose() {
-    const f: V = [this.facing, 0, 0], u: V = [0, 1, 0], r = cross(f, u);
+    // (the frame turned about the vertical when the fencer turns away to walk)
+    const f: V = [this.facing * Math.cos(this.yaw), 0, this.facing * Math.sin(this.yaw)], u: V = [0, 1, 0], r = cross(f, u);
     this.frame = { o: [this.s, 0, 0], f, u, r };
     const F = this.frame, L = this.lunge;
-    const hipsFwd = BODY.lungeHips * L, hipsUp = BODY.pelvis - BODY.lungeDrop * L;
+    const hipsFwd = BODY.lungeHips * L, hipsUp = BODY.pelvis - BODY.lungeDrop * L + STANDING.rise * this.standK;
     // (side on: the weapon shoulder leads, the torso leans into a lunge)
     const lean = 0.16 * L, sl = Math.sin(lean), cl = Math.cos(lean);
     // the body's own motion (motion.ts): the pelvis's own bob and shift, the trunk's sway over it (in proportion to
@@ -179,7 +204,9 @@ export class Fencer {
     this.hand = this.blade ? madd(G, norm(sub(P, G)), BODY.gripToGuard) : this.shoulder;
     // (the elbow tucked under the forearm, a little out, as an arm carried forward holds it: one elbow, for the blades to
     // meet and for the eye)
-    this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.2), [0, -1, 0]));
+    // (an arm hanging or raised for the scene bends its elbow back and out instead)
+    const pole = add(scale(add(scale(r, 0.2), [0, -1, 0]), 1 - this.armK), scale(add(scale(f, -1), scale(r, 0.4)), this.armK));
+    this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, pole);
     this.elbowLook = this.elbow;
     // the rear arm, relaxed, low and a little back (the modern épée carriage: no raised arm); in a lunge it swings back
     // and straightens, for balance. It's posed for the motion's lunge (thrown ahead of the feet, overshooting), turned
@@ -225,8 +252,42 @@ export class Fencer {
     let dir = lineOf(F, e);
     dir = rot(dir, F.u, -this.px);
     dir = rot(dir, norm(cross(dir, F.u)), this.py);
+    if (this.armK > 1e-3 && this.scene) {
+      const [Gs, ds] = this.sceneArm(this.scene), k = this.armK;
+      const Gb: V = [G[0] + (Gs[0] - G[0]) * k, G[1] + (Gs[1] - G[1]) * k, G[2] + (Gs[2] - G[2]) * k];
+      const db = norm([dir[0] + (ds[0] - dir[0]) * k, dir[1] + (ds[1] - dir[1]) * k, dir[2] + (ds[2] - dir[2]) * k]);
+      return [madd(Gb, db, -this.weapon.grip), Gb];
+    }
     const P = madd(G, dir, -this.weapon.grip);
     return [P, G];
+  }
+
+  /** the scene's weapon arm: where the guard goes and which way the blade points */
+  private sceneArm(S: Scene): [V, V] {
+    const F = this.frame, A = this.anchor, at = (a: number, b: number, c: number) => add(A, dirWorld(F, a, b, c));
+    // lowered: the hand by the hip, the point down and forward, near the floor
+    const downG = at(0.12, -0.5, 0.15), downD = norm(dirWorld(F, 0.55, -0.83, 0.05));
+    const t = S.armT;
+    if (S.arm === 'shake') {
+      // (shaking out the hand: a quick loose shake, settling)
+      const env = t < 1.3 ? Math.sin(Math.PI * t / 1.3) : 0;
+      return [madd(madd(downG, F.u, 0.035 * env * Math.sin(2 * Math.PI * 7 * t)), F.r, 0.02 * env * Math.sin(2 * Math.PI * 5 * t + 1)), downD];
+    }
+    if (S.arm === 'salute') {
+      // the salute: the guard brought up before the face, the blade upright; swept out toward the opponent; lowered
+      const keys: [number, V, V][] = [
+        [0, downG, downD],
+        [0.55, at(0.2, -0.04, -0.1), norm(dirWorld(F, 0.06, 1, 0))],
+        [0.9, at(0.2, -0.04, -0.1), norm(dirWorld(F, 0.06, 1, 0))],
+        [1.4, at(0.55, -0.12, 0.06), norm(dirWorld(F, 1, -0.1, 0))],
+        [1.75, at(0.55, -0.12, 0.06), norm(dirWorld(F, 1, -0.1, 0))],
+        [2.3, downG, downD],
+      ];
+      let i = 0; while (i < keys.length - 2 && t > keys[i + 1][0]) i++;
+      const [t0, g0, d0] = keys[i], [t1, g1, d1] = keys[i + 1], u = smooth(clamp((t - t0) / (t1 - t0), 0, 1));
+      return [[g0[0] + (g1[0] - g0[0]) * u, g0[1] + (g1[1] - g0[1]) * u, g0[2] + (g1[2] - g0[2]) * u], norm([d0[0] + (d1[0] - d0[0]) * u, d0[1] + (d1[1] - d0[1]) * u, d0[2] + (d1[2] - d0[2]) * u])];
+    }
+    return [downG, downD];
   }
 
   /** where the guard is sent at extension `e` with the hand moved (hx right, hy up), within the arm's reach */
@@ -260,17 +321,41 @@ export class Fencer {
     const e = this.ext;
     this.fatigue = clamp(this.fatigue + h * (e > FATIGUE.from ? ((e - FATIGUE.from) / (1 - FATIGUE.from)) / FATIGUE.tire : -(1 - e) / FATIGUE.rest), 0, 1);
     this.blade.strength = 1 - FATIGUE.weak * this.fatigue;
-    this.feet(h);
+    if (this.scene) { this.intent = idle(); this.act = null; this.queued = null; this.sceneFeet(h); }
+    else { this.feet(h); this.armK = Math.max(0, this.armK - h / 0.5); }
     this.follow(h);
     const L = this.lunge;
     this.motion.update({
-      pelvisF: this.facing * this.s + BODY.lungeHips * L, pelvisU: BODY.pelvis - BODY.lungeDrop * L,
-      lunge: L, ext: this.ext, lift: Math.max(this.frontLift, this.backLift), moving: !!this.act, fatigue: this.fatigue,
+      pelvisF: this.facing * this.s + BODY.lungeHips * L, pelvisU: BODY.pelvis - BODY.lungeDrop * L + STANDING.rise * this.standK,
+      lunge: L, ext: this.ext, lift: Math.max(this.frontLift, this.backLift), moving: !!this.act || Math.abs(this.walkV) > 0.1, fatigue: this.fatigue,
     }, h);
     this.pose();
     const [P, G] = this.handTarget();
     this.blade.aim(P, G, h);
     this.blade.thumb = thumbOf(this.blade.handAxis, this.roll);
+  }
+
+  /** the scene's body: out of a lunge, up out of guard, turned, walking (the feet stepping by a gait), and the arm eased
+   * from the guard into whatever the scene has it do */
+  private sceneFeet(h: number) {
+    const S = this.scene!, k = (rate: number) => 1 - Math.exp(-h * rate);
+    if (this.lunge > 0) this.lunge = Math.max(0, this.lunge - h / BODY.recoverTime);
+    this.standK += (S.stand - this.standK) * k(3.2);
+    this.yaw += (S.turn - this.yaw) * k(4);
+    this.armK += ((S.arm === 'guard' ? 0 : 1) - this.armK) * k(4);
+    const d = S.walkTo === null ? 0 : S.walkTo - this.s;
+    // (no walking before the turn's mostly made, if it's turning; slowing into the line)
+    const turned = Math.abs(S.turn - this.yaw) < 0.6;
+    const want = turned ? Math.max(-STANDING.speed, Math.min(STANDING.speed, d * 2.5)) : 0;
+    this.walkV += (want - this.walkV) * k(5);
+    this.s += this.walkV * h;
+    this.gait += Math.abs(this.walkV) * h / STANDING.stride * Math.PI;
+    // the feet: closer standing; walking, one forward as the other goes back, each lifted as it swings through
+    const half = BODY.stance / 2, st = this.standK, a = 0.24 * Math.min(1, Math.abs(this.walkV) / 0.7) * st;
+    const sw = Math.sin(this.gait), lift = 0.05 * Math.min(1, Math.abs(this.walkV) / 0.5);
+    this.front = half + (STANDING.feet - half) * st + a * sw;
+    this.back = -half + (half - STANDING.feet) * st - a * sw;
+    this.frontLift = lift * Math.max(0, Math.cos(this.gait)); this.backLift = lift * Math.max(0, -Math.cos(this.gait));
   }
 
   /** the front of the body along the piste (for keeping two fencers apart) */

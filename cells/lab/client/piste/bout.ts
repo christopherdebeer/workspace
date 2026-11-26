@@ -8,6 +8,7 @@
  * Fencer 0 is "you" only to the code that draws and listens; to the bout they're the same.
  */
 import { Fencer, BODY } from './fencer';
+import { Ceremony } from './ceremony';
 import { Box, award, type Light } from './box';
 import { BladePair, bodyContact, floorContact, guardContact, type ContactStats, type TipContact } from './contact';
 import type { Weapon } from './weapons';
@@ -17,7 +18,9 @@ export const H = 1 / 2000;
 /** the piste: 14 m, en garde lines 2 m either side of the middle */
 export const PISTE = { half: 7, garde: 2, width: 1.5 };
 
-export type Phase = 'ready' | 'fence' | 'halt' | 'over';
+/** prelude: before the bout, the salute; ready: on guard, waiting for allez; fence; halt: the referee's stopped it;
+ * interlude: back to the lines between touches; over */
+export type Phase = 'prelude' | 'ready' | 'fence' | 'halt' | 'interlude' | 'over';
 export type BoutEvent =
   | { type: 'clash'; t: number; at: V; strength: number; where: [number, number] }
   | { type: 'reset'; t: number }
@@ -38,6 +41,8 @@ export interface Options {
   time?: number;
   /** for drawing priority, if it comes to that */
   seed?: number;
+  /** before the bout, between touches and after it, what fencers do (ceremony.ts) instead of being put on their lines */
+  ceremony?: boolean;
 }
 
 export class Bout {
@@ -70,6 +75,8 @@ export class Bout {
   /** when each bell was last touched by the other blade */
   private bellAt: [number, number] = [-9, -9];
   private lastClash = -1;
+  /** the ceremony outside the fencing, if the bout has one */
+  readonly ceremony: Ceremony;
 
   constructor(readonly opts: Options) {
     this.fencers = [new Fencer(opts.weapon, -PISTE.garde, 1), new Fencer(opts.weapon, PISTE.garde, -1)];
@@ -77,6 +84,8 @@ export class Bout {
     this.pair = new BladePair(this.fencers[0].blade, this.fencers[1].blade);
     if (opts.referee === false) this.phase = 'fence';
     this.clock = opts.time ?? 180;
+    this.ceremony = new Ceremony(opts.seed ?? 1);
+    if (this.rites) { this.phase = 'prelude'; this.ceremony.begin('prelude'); }
   }
 
   /** run on by dt (real seconds); returns how many substeps ran */
@@ -137,9 +146,15 @@ export class Bout {
     }
   }
 
+  /** whether there's a ceremony: a referee'd bout that asked for one */
+  private get rites() { return !!this.opts.ceremony && this.opts.referee !== false; }
+  private get lines(): [number, number] { return [-PISTE.garde, PISTE.garde]; }
+
   /** the referee: en garde, allez, halt, the point, and the end */
   private referee() {
     if (this.opts.referee === false) return;
+    // (the ceremony runs the bodies before the bout, between touches and after; done, they're on guard on their lines)
+    if (this.ceremony.rite && this.ceremony.update(H, this.fencers, this.lines) && (this.phase === 'prelude' || this.phase === 'interlude')) this.settle();
     const since = this.t - this.phaseAt;
     if (this.phase === 'ready' && since > 0.9) this.go('fence', () => this.events.push({ type: 'allez', t: this.t }));
     if (this.phase === 'fence') {
@@ -178,7 +193,8 @@ export class Bout {
         this.clock = 60;
         this.events.push({ type: 'priority', t: this.t, who: this.priority });
       }
-      if (winner !== null) { this.go('over'); this.events.push({ type: 'over', t: this.t, winner }); }
+      if (winner !== null) { this.go('over'); this.events.push({ type: 'over', t: this.t, winner }); if (this.rites) this.ceremony.begin('over'); }
+      else if (this.rites) { this.go('interlude'); this.ceremony.begin('interlude', this.score[0] + this.score[1]); }
       else this.enGarde();
     }
   }
@@ -187,6 +203,17 @@ export class Bout {
   enGarde() {
     this.fencers[0].reset(-PISTE.garde);
     this.fencers[1].reset(PISTE.garde);
+    this.box.reset();
+    this.call = '';
+    this.peak = [0, 0];
+    this.go('ready');
+    this.events.push({ type: 'reset', t: this.t });
+  }
+
+  /** after the ceremony: on guard where they've walked to (their lines), the box cleared, waiting for allez */
+  private settle() {
+    const [A, B] = this.fencers;
+    A.reset(this.lines[0]); B.reset(this.lines[1]);
     this.box.reset();
     this.call = '';
     this.peak = [0, 0];
@@ -204,7 +231,10 @@ export class Bout {
     this.phase = 'fence'; this.phaseAt = this.t;
     this.events.push({ type: 'reset', t: this.t });
   }
-  restart() { this.score = [0, 0]; this.clock = this.opts.time ?? 180; this.priority = null; this.timeUp = false; this.enGarde(); }
+  restart() {
+    this.score = [0, 0]; this.clock = this.opts.time ?? 180; this.priority = null; this.timeUp = false; this.enGarde();
+    if (this.rites) { this.go('prelude'); this.ceremony.begin('prelude'); }
+  }
 
   private go(p: Phase, then?: () => void) { this.phase = p; this.phaseAt = this.t; then?.(); }
 
