@@ -55,7 +55,7 @@ if (readout) body.classList.add('readout');
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = document.querySelector('canvas')!;
 // (the ceremony: before the bout, between touches and after it; `ceremony=0` puts them straight back on their lines)
-const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study, ceremony: mode === 'bout' && qs.get('ceremony') !== '0' });
+const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study, ceremony: mode === 'bout' && qs.get('ceremony') !== '0', warmup: mode === 'bout' && !auto && !study });
 /** the study's script, by the bout's clock (it loops every six seconds) */
 const STUDY = { step: 0.9, roll: [2.0, 2.8] as [number, number], rollTo: 0.6, loop: 6 };
 const studyClock = () => bout.t % STUDY.loop;
@@ -204,6 +204,7 @@ function hear(events: BoutEvent[]) {
   for (const e of events) {
     if (e.type === 'light') { if (e.who === 1) navigator.vibrate?.(60); }
     else if (e.type === 'halt' && mode === 'bout') say(e.call || 'halt', `${e.points[0] || e.points[1] ? 'point' : 'no point'}`);
+    else if (e.type === 'reset' && mode === 'bout' && bout.phase === 'ready') say('en garde', '');
     else if (e.type === 'allez' && mode === 'bout') { say('allez', ''); setTimeout(() => { if ($('say').textContent === 'allez') say('', ''); }, 700); }
     else if (e.type === 'over') say(e.winner === 0 ? 'you win' : 'they win', 'tap to fence again');
     else if (e.type === 'time') say('time', '');
@@ -322,9 +323,27 @@ const t0 = Number(qs.get('t') ?? 0) || 0;
 for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); if (s > t0 - 1.5) renderer.simulate(bout); }
 recorder?.reset();
 
+// ─── the warm-up: free until both thumbs are held still for a few seconds; then the salute, counted down ─────────────
+const HOLD = 3;
+let holdT = 0, said = '';
+function warmup(wall: number) {
+  if (bout.phase === 'warmup') {
+    const h = thumbs.held();
+    holdT = h.down && h.still ? holdT + wall : 0;
+    if (holdT >= HOLD) { holdT = 0; bout.begin(); }
+  } else holdT = 0;
+  body.classList.toggle('warmup', bout.phase === 'warmup');
+  body.style.setProperty('--hold', String(Math.min(1, holdT / HOLD)));
+  // (the words: what to do warming up; the count over the salute)
+  let w = '';
+  if (bout.phase === 'warmup') w = holdT > 0 ? 'warm up|keep holding' : 'warm up|hold both thumbs still to begin';
+  else if (bout.phase === 'prelude') { const cd = bout.ceremony.countdown(); w = cd !== null && cd > 0 ? `${Math.ceil(Math.min(3, cd))}|salute` : '|'; }
+  if (w !== said) { if (w || said) { const [a, b] = w.split('|'); say(a ?? '', b ?? ''); } said = w; }
+}
+
 let last = performance.now(), rate = 1;
 function frame(now: number) {
-  const wall = Math.min(0.05, (now - last) / 1000);
+  const real = Math.max(0, (now - last) / 1000), wall = Math.min(0.05, real);
   last = now;
   if (replay) runReplay(wall);
   else if (mode !== 'menu' && !qs.has('still')) {
@@ -332,6 +351,8 @@ function frame(now: number) {
     rate = director.update(wall) * timeScale;
     const dt = wall * rate;
     tick(dt, true);
+    // (the hold is counted in real seconds, whatever the frame rate)
+    warmup(Math.min(0.5, real));
     const events = bout.drain();
     if (events.some((e) => e.type === 'reset')) recorder?.reset();
     runner?.hear(events);

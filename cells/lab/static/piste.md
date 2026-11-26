@@ -138,6 +138,8 @@ Anything that decides speaks only `Intent`: a thumb scheme, a better opponent, a
 
 ## Between touches
 
+A bout you fence opens with a warm-up. You're free to step, extend and lunge to get the feel, the opponent loosens up on its line, and nothing scores. Hold both thumbs still for three seconds (or the mouse, or Enter) and it begins, counted down over the salute. A replay of a touch waits at its end: see it again, or go on.
+
 A bout has its ceremony (`ceremony.ts`; `ceremony=0` turns it off). Before it, the fencers stand at their lines, shake an arm out, salute each other (the guard up before the face, the blade upright, swept out toward the opponent, lowered) and come on guard for "en garde". After a touch they aren't put back on their lines. They come out of the lunge, stand up out of guard, lower their points to the floor and walk back. The opponent turns its back to walk if it's far, while you step back facing them, so your view stays on them. One or both shake the weapon arm out on the way. They take a moment on the line, then come on guard, and the referee says en garde. After the bout they stand and salute. Standing, walking and the arm's gestures are a posture layer on the fencer (`Scene` in `fencer.ts`), scripted by the bout's clock and a seed, so a replay shows the same walk. The body's own motion (breath, sway, the rear arm's swing) runs through all of it.
 
 ## The look

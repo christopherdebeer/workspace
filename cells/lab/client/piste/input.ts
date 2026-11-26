@@ -136,6 +136,14 @@ export class Thumbs {
     return I;
   }
 
+  /** for starting a bout: whether the thumbs are down (both, or the mouse, or Enter held) and still (each near where it
+   * landed: resting en garde, not fencing) */
+  held(): { down: boolean; still: boolean } {
+    const near = (th: Thumb | null) => !th || Math.hypot(th.x - th.x0, th.y - th.y0) < 0.25 * this.unit;
+    const down = (!!this.left && !!this.right) || !!this.mouse || this.keys.has('Enter');
+    return { down, still: near(this.left) && near(this.right) && near(this.mouse) };
+  }
+
   /** for the marks drawn under the thumbs */
   get touches() { return { right: this.right, left: this.left, twist: this.twist, unit: this.unit }; }
 }

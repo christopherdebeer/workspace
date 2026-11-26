@@ -363,6 +363,24 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   c.ok('ceremony: …and it takes under 12 s', interlude < 12, interlude);
 }
 
+// the warm-up: free and scoring nothing until begin(); then back to the lines, the salute, en garde, allez
+{
+  const b = new Bout({ weapon: EPEE, to: 5, ceremony: true, warmup: true, seed: 4 });
+  const [me, op] = b.fencers, s0 = me.s;
+  let lit = 0, opDrift = 0;
+  for (let s = 0; s < 6; s += DT) {
+    me.intent = { ...idle(), extend: 1, step: s > 1 && s < 1.02 ? 'advance' : null }; op.intent = idle();
+    b.advance(DT); for (const e of b.drain()) if (e.type === 'light') lit++;
+    opDrift = Math.max(opDrift, Math.abs(op.s - PISTE.garde));
+  }
+  const moved = me.s - s0, stayed = b.phase === 'warmup';
+  b.begin();
+  let allez = null;
+  for (let s = 0; s < 15 && allez === null; s += DT) { me.intent = idle(); op.intent = idle(); b.advance(DT); for (const e of b.drain()) if (e.type === 'allez') allez = s; }
+  c.ok('warm-up: free (you can step), scoring nothing, until asked to begin', stayed && moved > 0.2 && lit === 0 && opDrift < 0.03, { stayed, moved, lit, opDrift });
+  c.ok('warm-up: begun, back to the lines, salute, allez (within 8 s)', allez !== null && allez < 8 && Math.abs(me.s + PISTE.garde) < 0.03, { allez, s: me.s });
+}
+
 // two stand-ins fence a bout to five
 {
   const b = new Bout({ weapon: EPEE, to: 5 }), ai = [new Opponent(b, 0, SPARRING, 3), new Opponent(b, 1, SPARRING, 4)];

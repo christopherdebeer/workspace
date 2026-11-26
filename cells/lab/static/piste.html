@@ -27,6 +27,11 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 #say{font-size:clamp(30px,9vw,60px);letter-spacing:.18em;text-indent:.18em;text-transform:uppercase;font-weight:300}
 #sub{margin-top:8px;font-size:11px;letter-spacing:.24em;text-transform:uppercase;opacity:.8}
 #say:empty,#sub:empty{display:none}
+/* the warm-up's hold to begin: a ring that fills */
+#hold{position:fixed;left:50%;bottom:calc(max(12px,env(safe-area-inset-bottom)) + 104px);width:46px;height:46px;margin-left:-23px;display:none;pointer-events:none}
+.warmup #hold{display:block}
+#hold circle{fill:none;stroke:#ffffff30;stroke-width:2.5}
+#hold .fill{stroke:var(--ink);stroke-dasharray:106.8;stroke-dashoffset:calc(106.8 * (1 - var(--hold, 0)));transform:rotate(-90deg);transform-origin:center}
 #readout{position:fixed;left:max(10px,env(safe-area-inset-left));top:calc(max(12px,env(safe-area-inset-top)) + 46px);margin:0;font:11px/1.45 ui-monospace,Menlo,monospace;white-space:pre;color:#cfe;opacity:.85;pointer-events:none;display:none;text-shadow:0 1px 2px #000}
 .readout #readout{display:block}
 .readout #hint{display:none}
@@ -91,6 +96,7 @@ body:not(.menu) #menu{display:none}
 <div id="clock"></div>
 <div id="arm">arm<i></i></div>
 <div id="mid" role="status"><div id="say"></div><div id="sub"></div></div>
+<div id="hold" aria-hidden="true"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="17"/><circle class="fill" cx="20" cy="20" r="17"/></svg></div>
 <div id="hint">left thumb: up to extend, further to lunge · tap to advance · down to retreat<br>right thumb: across to parry · up and down for the point</div>
 <div id="lesson"><div id="lTitle"></div><div id="lPrompt"></div><div id="lMeta"><span id="lDots"></span><span id="lPace"></span></div></div>
 <div id="brief" class="card" hidden><h2 id="bTitle"></h2><div id="bText"></div><div class="acts"><button id="bGo" class="go">begin</button><a href="?">lessons</a></div></div>
