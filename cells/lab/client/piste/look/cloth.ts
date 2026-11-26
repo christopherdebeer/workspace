@@ -101,7 +101,7 @@ void main(){
 }`;
 /** a pass of the constraints, each point from its neighbours (Jacobi), then the body's: ease and backstop */
 const SOLVE_FS = HEAD + `
-uniform sampler2D X, Bind, BindN, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
+uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
 /** the arms (upper and fore, each side: a, b, radius), for the jacket's body to lie against */
 uniform vec4 armA[4], armB[4];
 out vec4 o;
@@ -110,7 +110,6 @@ void main(){
   int i = me(); if (i >= N) { o = vec4(0); return; }
   vec4 ma = texelFetch(MetaA, tc(i), 0), mb = texelFetch(MetaB, tc(i), 0);
   int r = int(ma.x), c = int(ma.y), R = int(ma.z), S = int(ma.w), off = int(mb.x);
-  vec4 bi = texelFetch(Bind, tc(i), 0);
   vec3 x = texelFetch(X, tc(i), 0).xyz, acc = vec3(0.0); float n = 0.0;
   vec4 rest[3] = vec4[3](texelFetch(Rest0, tc(i), 0), texelFetch(Rest1, tc(i), 0), texelFetch(Rest2, tc(i), 0));
   vec3 a = mix(texelFetch(A0, tc(i), 0).xyz, texelFetch(A1, tc(i), 0).xyz, s);
@@ -130,20 +129,20 @@ void main(){
   x += omega * acc / max(n, 1.0);
   // thickness: the point's offset from its neighbours' middle eased toward the skin's offset there
   if (m4 > 3.5) {
-    vec3 smooth = midX / m4 + (a - midA / m4);
-    x += min(1.0, kThick * texelFetch(BindN, tc(i), 0).w) * (smooth - x);
+    vec3 sheet = midX / m4 + (a - midA / m4);
+    x += min(1.0, kThick * abs(mb.y)) * (sheet - x);
     // folded over: where the cloth's surface here has turned inside out against the skin's (its grid's normal against
     // the skin grid's), it's crossed itself; pull it back toward a smooth sheet
     vec3 m = cross(nx[0] - nx[1], nx[2] - nx[3]), mA = cross(na[0] - na[1], na[2] - na[3]);
     float agree = dot(m, mA) / max(1e-12, length(m) * length(mA));
-    if (agree < 0.3) x = mix(x, smooth, kUnfold * clamp((0.3 - agree) / 0.6, 0.0, 1.0));
+    if (agree < 0.3) x = mix(x, sheet, kUnfold * clamp((0.3 - agree) / 0.6, 0.0, 1.0));
   }
   // the body: within the ease of its place on the skin, and never inside it
   vec3 nn = normalize(mix(texelFetch(N0, tc(i), 0).xyz, texelFetch(N1, tc(i), 0).xyz, s));
-  float slack = bi.w;
+  float slack = mb.w;
   // the jacket's body lies against the arms (not where an arm and the body meet: the armpit, where the skin under it
   // is already inside the arm)
-  if (mb.y > 0.5 && slack > 0.004) for (int q = 0; q < 4; q++) {
+  if (mb.y > 0.0 && slack > 0.004) for (int q = 0; q < 4; q++) {
     vec3 ab = armB[q].xyz - armA[q].xyz; float rq = armA[q].w + 0.008;
     vec3 ca = armA[q].xyz + ab * clamp(dot(a - armA[q].xyz, ab) / max(1e-9, dot(ab, ab)), 0.0, 1.0);
     if (length(a - ca) < rq) continue;
@@ -210,9 +209,14 @@ export class GpuCloth {
   /** a stress dial (`?clothx=4`): this many times the substeps, to find where a phone's frame rate gives */
   stress = 1;
 
+  /** why the last attempt to start the cloth failed (for the readout), or null */
+  static failure: string | null = null;
   static create(gl: WebGL2RenderingContext, athlete: Athlete): GpuCloth | null {
-    if (!gl.getExtension('EXT_color_buffer_float') || !athlete.pieces?.length) return null;
-    try { return new GpuCloth(gl, athlete); } catch (e) { console.warn(e); return null; }
+    if (!gl.getExtension('EXT_color_buffer_float')) { GpuCloth.failure = 'no float render targets'; return null; }
+    if (!athlete.pieces?.length) { GpuCloth.failure = 'no garment pieces'; return null; }
+    const units = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number;
+    if (units < 14) { GpuCloth.failure = `only ${units} texture units`; return null; }
+    try { return new GpuCloth(gl, athlete); } catch (e) { GpuCloth.failure = String((e as Error)?.message ?? e).slice(0, 160); console.warn(e); return null; }
   }
 
   private constructor(readonly gl: WebGL2RenderingContext, athlete: Athlete) {
@@ -231,7 +235,9 @@ export class GpuCloth {
         bind.set([V[v], V[v + 1], V[v + 2], ease(p, r / (p.R - 1))], t);
         bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);
         jt.set(V.subarray(v + 12, v + 16), t); wt.set(V.subarray(v + 16, v + 20), t);
-        metaA.set([r, c, p.R, S], t); metaB.set([off, p.kind === 'jacket' ? 1 : 0, 0.002, 0], t);
+        metaA.set([r, c, p.R, S], t); // (MetaB: first texel; thickness, negative for a piece the arms don't press (the sleeves themselves); backstop
+        // inset; ease. Packed so the solver reads ten textures: phones allow sixteen, and the renderer keeps three)
+        metaB.set([off, (p.kind.startsWith('sleeve') ? -1 : 1) * thickness(p), 0.002, ease(p, r / (p.R - 1))], t);
       }
       off += p.R * S;
     });
@@ -289,7 +295,7 @@ export class GpuCloth {
         st.spare = [st.x, st.p]; st.x = nx; st.p = np;
         for (let it = 0; it < CLOTH.passes; it++) {
           const out = st.spare[0];
-          this.pass('solve', this.fb([out]), { X: st.x, Bind: this.stat.bind, BindN: this.stat.bindN, MetaA: this.stat.metaA, MetaB: this.stat.metaB, Rest0: this.stat.rest0, Rest1: this.stat.rest1, Rest2: this.stat.rest2, A0, A1, N0, N1 }, (l) => {
+          this.pass('solve', this.fb([out]), { X: st.x, MetaA: this.stat.metaA, MetaB: this.stat.metaB, Rest0: this.stat.rest0, Rest1: this.stat.rest1, Rest2: this.stat.rest2, A0, A1, N0, N1 }, (l) => {
             gl.uniform1f(l.s, (k + 1) / n); gl.uniform1f(l.kStretch, CLOTH.stretch); gl.uniform1f(l.kShear, CLOTH.shear); gl.uniform1f(l.kBend, CLOTH.bend); gl.uniform1f(l.omega, CLOTH.omega); gl.uniform1f(l.kThick, CLOTH.thick); gl.uniform1f(l.kUnfold, CLOTH.unfold);
             gl.uniform4fv(l.armA, arms.subarray(0, 16)); gl.uniform4fv(l.armB, arms.subarray(16, 32));
           });

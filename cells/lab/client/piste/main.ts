@@ -16,6 +16,7 @@ import { Opponent, Dummy, SPARRING, LEVELS } from './ai';
 import type { Controller, Intent } from './intent';
 import { idle } from './intent';
 import { Thumbs, GAIN } from './input';
+import { GpuCloth } from './look/cloth';
 import { Renderer, type View } from './draw';
 import type { Light } from './box';
 import { TimeDirector } from './time';
@@ -295,7 +296,7 @@ function readOut(rate: number) {
     `bow  you ${f(me.blade.bow() * 100, 1)} cm  them ${f(op.blade.bow() * 100, 1)} cm`,
     `hand effort  you ${f(me.blade.effort[1] * 100, 0)}%  them ${f(op.blade.effort[1] * 100, 0)}%   ext ${f(me.extension)}`,
     `critical ${f(director.critical)}  assist ${f(director.assist)}   arm fatigue you ${f(me.fatigue)}  them ${f(op.fatigue)}`,
-    renderer.cloth ? `cloth: simulated ×${renderer.cloth.stress}, ${renderer.cloth.passes} passes a frame` : 'cloth: posed',
+    renderer.cloth ? `cloth: simulated ×${renderer.cloth.stress}, ${renderer.cloth.passes} passes a frame` : qs.get('cloth') === 'sim' ? `cloth: posed (failed: ${GpuCloth.failure ?? 'unknown'})` : 'cloth: posed',
     them instanceof Opponent ? `them: ${them.tactic}` : runner ? `lesson: ${runner.stage}` : `them: ${ai}`,
   ].join('\n');
 }

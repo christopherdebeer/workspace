@@ -74,7 +74,7 @@ export class Renderer {
     for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha']) this.u[k] = gl.getUniformLocation(this.main, k);
     // (with the cloth spliced into the skinning, if asked for and it splices; otherwise as before)
     let skinVS = SKIN_VS, shadowVS = SKIN_SHADOW_VS;
-    if (opts.cloth) try { skinVS = withCloth(SKIN_VS, false); shadowVS = withCloth(SKIN_SHADOW_VS, true); this.clothShaders = true; } catch (e) { console.warn(e); }
+    if (opts.cloth) try { skinVS = withCloth(SKIN_VS, false); shadowVS = withCloth(SKIN_SHADOW_VS, true); this.clothShaders = true; } catch (e) { GpuCloth.failure = String((e as Error)?.message ?? e); console.warn(e); }
     this.skin = program(gl, skinVS, MAIN_FS);
     this.kitTexture = gl.createTexture()!;
     gl.activeTexture(gl.TEXTURE1);
