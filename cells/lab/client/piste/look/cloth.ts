@@ -2,7 +2,8 @@
  * The kit as cloth, simulated on the GPU (`?cloth=sim`): the jacket, both sleeves and the breeches' legs.
  *
  * The garments are the athlete's own lofted pieces (athlete.ts). Each is a grid of rings round the body, about a
- * centimetre apart, so each of its points has neighbours along and round it. Their lengths at rest, as built, are the
+ * centimetre apart, so each of its points has neighbours along and round it. Their lengths at rest are the drafted
+ * pattern's (tailor.ts): distances on flat panels cut at the seams, not on the worn shape. The
  * cloth as cut. The cloth is never part of the bout: the blade meets the body's capsules. So the cloth runs on the GPU,
  * in WebGL 2's own render passes, and nothing comes back to the CPU. The renderer's skinning shader reads the cloth's
  * points straight from the texture it's simulated in.
@@ -27,6 +28,7 @@
  */
 import type { Athlete, ClothPiece } from './athlete';
 import { SKIN_STRIDE } from './athlete';
+import { tailor } from './tailor';
 
 /** the cloth's dials: substep length (s), passes a substep, stiffnesses (0..1 a pass), relaxation, damping, and how
  * much of the body's motion the cloth is dragged toward each substep */
@@ -50,20 +52,6 @@ function ease(p: ClothPiece, row: number): number {
     case 'sleeveW': case 'sleeveR': return k([[0, 0], [0.07, 0.003], [Math.max(0.1, j - 0.2), 0.012], [j, 0.024], [Math.min(0.72, j + 0.14), 0.012], [0.78, 0.005], [0.82, 0.0015], [0.85, 0]]);
     // (waist to the band below the knee: the waist and the band fastened)
     case 'breeches': return k([[0, 0], [0.1, 0.004], [0.5, 0.012], [j, 0.02], [Math.min(0.94, j + 0.12), 0.008], [0.97, 0]]);
-  }
-}
-
-/** the cut: how much longer (along) and fuller (round) the cloth is than the skin it was shaped on, by row fraction.
- * This is the tailoring: cloth cut to the body exactly has nothing to fold with. A sleeve is cut longer than the arm
- * and fuller at the elbow; the jacket a little full in the body; the breeches long over the knee */
-function cut(p: ClothPiece, row: number): [number, number] {
-  const j = p.joint ?? 0.5, near = (c: number, w: number) => Math.exp(-(((row - c) / w) ** 2));
-  switch (p.kind) {
-    // (fitted: a little length for the hem to hang by, fullness only across the chest, where extending draws it)
-    case 'jacket': return [1.01, 1.008 + 0.017 * near(0.62, 0.12)];
-    case 'sleeveW': case 'sleeveR': return [1.03 + 0.07 * near(j, 0.16) + 0.04 * near(j + 0.2, 0.12), 1.04 + 0.05 * near(j, 0.18)];
-    // (fitted through the seat and thigh, long over the knee)
-    case 'breeches': return [1.01 + 0.06 * near(j, 0.12), 1.012 + 0.02 * near(j, 0.16)];
   }
 }
 
@@ -111,7 +99,7 @@ void main(){
 }`;
 /** a pass of the constraints, each point from its neighbours (Jacobi), then the body's: ease and backstop */
 const SOLVE_FS = HEAD + `
-uniform sampler2D X, Bind, BindN, MetaA, MetaB, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick;
+uniform sampler2D X, Bind, BindN, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1; uniform float s, kStretch, kShear, kBend, omega, kThick;
 out vec4 o;
 const ivec2 OFF[12] = ivec2[12](ivec2(1,0), ivec2(-1,0), ivec2(0,1), ivec2(0,-1), ivec2(1,1), ivec2(1,-1), ivec2(-1,1), ivec2(-1,-1), ivec2(2,0), ivec2(-2,0), ivec2(0,2), ivec2(0,-2));
 void main(){
@@ -120,19 +108,18 @@ void main(){
   int r = int(ma.x), c = int(ma.y), R = int(ma.z), S = int(ma.w), off = int(mb.x);
   vec4 bi = texelFetch(Bind, tc(i), 0);
   vec3 x = texelFetch(X, tc(i), 0).xyz, acc = vec3(0.0); float n = 0.0;
+  vec4 rest[3] = vec4[3](texelFetch(Rest0, tc(i), 0), texelFetch(Rest1, tc(i), 0), texelFetch(Rest2, tc(i), 0));
   vec3 a = mix(texelFetch(A0, tc(i), 0).xyz, texelFetch(A1, tc(i), 0).xyz, s);
   vec3 midX = vec3(0.0), midA = vec3(0.0); float m4 = 0.0;
   for (int k = 0; k < 12; k++) {
     int rr = r + OFF[k].x; if (rr < 0 || rr >= R) continue;
     int cc = (c + OFF[k].y + S) % S, j = off + rr * S + cc;
-    vec3 xj = texelFetch(X, tc(j), 0).xyz, bj = texelFetch(Bind, tc(j), 0).xyz;
+    vec3 xj = texelFetch(X, tc(j), 0).xyz;
     vec3 d = x - xj; float l = length(d); if (l < 1e-7) continue;
     float kk = k < 4 ? kStretch : (k < 8 ? kShear : kBend);
-    // (the rest length: the skin's, eased by the cut, along or round or, on a diagonal, both)
-    vec4 mj = texelFetch(MetaB, tc(j), 0);
-    float along = 0.5 * (mb.y + mj.y), round = 0.5 * (mb.w + mj.w);
-    float e = OFF[k].y == 0 ? along : (OFF[k].x == 0 ? round : sqrt(0.5 * (along * along + round * round)));
-    acc -= 0.5 * kk * (l - e * length(bi.xyz - bj)) * d / l; n += 1.0;
+    // (the rest length: the pattern's, on the flat paper)
+    float L = rest[k / 4][k % 4]; if (L <= 0.0) continue;
+    acc -= 0.5 * kk * (l - L) * d / l; n += 1.0;
     if (k < 4) { midX += xj; midA += mix(texelFetch(A0, tc(j), 0).xyz, texelFetch(A1, tc(j), 0).xyz, s); m4 += 1.0; }
   }
   x += omega * acc / max(n, 1.0);
@@ -221,16 +208,19 @@ export class GpuCloth {
         bind.set([V[v], V[v + 1], V[v + 2], ease(p, r / (p.R - 1))], t);
         bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);
         jt.set(V.subarray(v + 12, v + 16), t); wt.set(V.subarray(v + 16, v + 20), t);
-        metaA.set([r, c, p.R, S], t); const [al, ar] = cut(p, r / (p.R - 1)); metaB.set([off, al, 0.002, ar], t);
+        metaA.set([r, c, p.R, S], t); metaB.set([off, 0, 0.002, 0], t);
       }
       off += p.R * S;
     });
-    for (const [k, d] of Object.entries({ bind, bindN, jt, wt, metaA, metaB })) this.stat[k] = this.texture(d);
+    // the rest lengths: the pattern drafted to this athlete, four neighbours to a texture
+    const draft = tailor(V, ps), rests = [0, 1, 2].map(() => new Float32Array(n * 4));
+    for (let i = 0; i < this.N; i++) for (let k = 0; k < 12; k++) rests[k >> 2][i * 4 + (k & 3)] = draft.rest[i * 12 + k];
+    for (const [k, d] of Object.entries({ bind, bindN, jt, wt, metaA, metaB, rest0: rests[0], rest1: rests[1], rest2: rests[2] })) this.stat[k] = this.texture(d);
     const progs = { anchor: ANCHOR_FS, init: INIT_FS, predict: PREDICT_FS, solve: SOLVE_FS };
     for (const [k, fs] of Object.entries(progs)) {
       const p = this.progs[k] = program(gl, QUAD_VS, fs);
       const l: Record<string, WebGLUniformLocation | null> = {};
-      for (const u of ['W', 'N', 'Bind', 'BindN', 'Joints', 'Weights', 'bones', 'A', 'X', 'P', 'A0', 'A1', 'N0', 'N1', 'MetaA', 'MetaB', 'h', 'ratio', 's0', 's1', 's', 'damp', 'drag', 'kStretch', 'kShear', 'kBend', 'omega', 'kThick']) l[u] = gl.getUniformLocation(p, u);
+      for (const u of ['W', 'N', 'Bind', 'BindN', 'Joints', 'Weights', 'bones', 'A', 'X', 'P', 'A0', 'A1', 'N0', 'N1', 'MetaA', 'MetaB', 'Rest0', 'Rest1', 'Rest2', 'h', 'ratio', 's0', 's1', 's', 'damp', 'drag', 'kStretch', 'kShear', 'kBend', 'omega', 'kThick']) l[u] = gl.getUniformLocation(p, u);
       this.loc[k] = l;
     }
     this.vao = gl.createVertexArray()!;
@@ -275,7 +265,7 @@ export class GpuCloth {
         st.spare = [st.x, st.p]; st.x = nx; st.p = np;
         for (let it = 0; it < CLOTH.passes; it++) {
           const out = st.spare[0];
-          this.pass('solve', this.fb([out]), { X: st.x, Bind: this.stat.bind, BindN: this.stat.bindN, MetaA: this.stat.metaA, MetaB: this.stat.metaB, A0, A1, N0, N1 }, (l) => {
+          this.pass('solve', this.fb([out]), { X: st.x, Bind: this.stat.bind, BindN: this.stat.bindN, MetaA: this.stat.metaA, MetaB: this.stat.metaB, Rest0: this.stat.rest0, Rest1: this.stat.rest1, Rest2: this.stat.rest2, A0, A1, N0, N1 }, (l) => {
             gl.uniform1f(l.s, (k + 1) / n); gl.uniform1f(l.kStretch, CLOTH.stretch); gl.uniform1f(l.kShear, CLOTH.shear); gl.uniform1f(l.kBend, CLOTH.bend); gl.uniform1f(l.omega, CLOTH.omega); gl.uniform1f(l.kThick, CLOTH.thick);
           });
           st.spare[0] = st.x; st.x = out;
