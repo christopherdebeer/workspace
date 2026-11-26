@@ -362,22 +362,26 @@ const t0 = Number(qs.get('t') ?? 0) || 0;
 for (let s = 0; s < t0; s += 1 / 60) { tick(1 / 60, false); bout.drain(); if (s > t0 - 1.5) renderer.simulate(bout); }
 recorder?.reset();
 
-// ─── the warm-up: free until both thumbs are held still for a few seconds; then the salute, counted down ─────────────
-const HOLD = 3;
-let holdT = 0, said = '';
-function warmup(wall: number) {
+// ─── the warm-up: free until the right thumb comes to rest for a few seconds, where you are then being your guard;
+// the count over their salute, then allez ──────────────────────────────────────────────────────────────────────────
+const HOLD = 3, STILL = 0.08;
+let holdT = 0, holdAt: [number, number] | null = null, said = '';
+function warmup(real: number) {
   if (bout.phase === 'warmup') {
-    const h = thumbs.held();
-    holdT = h.down && h.still ? holdT + wall : 0;
-    if (holdT >= HOLD) { holdT = 0; bout.begin(); }
-  } else holdT = 0;
+    const h = thumbs.hold();
+    // (still: within a small circle of where it settled; moving past it starts the count again from there)
+    if (!h.down) { holdT = 0; holdAt = null; }
+    else if (!holdAt || Math.hypot(h.x - holdAt[0], h.y - holdAt[1]) > STILL * h.unit) { holdAt = [h.x, h.y]; holdT = 0; }
+    else holdT += real;
+    if (holdT >= HOLD) { holdT = 0; holdAt = null; bout.begin(); }
+  } else { holdT = 0; holdAt = null; }
   body.classList.toggle('warmup', bout.phase === 'warmup');
   body.style.setProperty('--hold', String(Math.min(1, holdT / HOLD)));
   // (the words: what to do warming up; the count over the salute)
   let w = '';
-  if (bout.phase === 'warmup') w = holdT > 0 ? 'warm up|keep holding' : 'warm up|hold both thumbs still to begin';
-  else if (bout.phase === 'prelude') { const cd = bout.ceremony.countdown(); w = cd !== null && cd > 0 ? `${Math.ceil(Math.min(3, cd))}|salute` : '|'; }
-  if (w !== said) { if (w || said) { const [a, b] = w.split('|'); say(a ?? '', b ?? ''); } said = w; }
+  if (bout.phase === 'warmup') w = holdT > 0.25 ? 'warm up|hold still: en garde' : 'warm up|rest the right thumb to begin';
+  else if (bout.phase === 'prelude') { const cd = bout.ceremony.countdown(); w = cd !== null && cd > 0 ? `${Math.ceil(Math.min(3, cd))}|` : '|'; }
+  if (w !== said) { if (w || said) { const [a, b2] = w.split('|'); say(a ?? '', b2 ?? ''); } said = w; }
 }
 
 let last = performance.now(), rate = 1;

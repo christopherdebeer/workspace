@@ -153,8 +153,8 @@ export class Bout {
     if (!this.rites) return;
     if (this.opts.warmup) { this.go('warmup'); this.ceremony.begin('warmup'); } else { this.go('prelude'); this.ceremony.begin('prelude'); }
   }
-  /** from the warm-up, begin: back to the lines, the salute, en garde */
-  begin() { if (this.phase === 'warmup') { this.go('prelude'); this.ceremony.begin('prelude', 0, { loosen: false }); } }
+  /** from the warm-up, begin: you're on guard where you are; they salute on their line; en garde */
+  begin() { if (this.phase === 'warmup') { this.go('prelude'); this.ceremony.begin('prelude', 0, { loosen: false, youStay: true }); } }
 
   /** whether there's a ceremony: a referee'd bout that asked for one */
   private get rites() { return !!this.opts.ceremony && this.opts.referee !== false; }
@@ -164,7 +164,7 @@ export class Bout {
   private referee() {
     if (this.opts.referee === false) return;
     // (the ceremony runs the bodies before the bout, between touches and after; done, they're on guard on their lines)
-    if (this.ceremony.rite && this.ceremony.update(H, this.fencers, this.lines) && (this.phase === 'prelude' || this.phase === 'interlude')) this.settle();
+    if (this.ceremony.rite) { const stay = this.ceremony.stays; if (this.ceremony.update(H, this.fencers, this.lines) && (this.phase === 'prelude' || this.phase === 'interlude')) this.settle(stay); }
     const since = this.t - this.phaseAt;
     if (this.phase === 'ready' && since > 0.9) this.go('fence', () => this.events.push({ type: 'allez', t: this.t }));
     if (this.phase === 'fence') {
@@ -221,9 +221,11 @@ export class Bout {
   }
 
   /** after the ceremony: on guard where they've walked to (their lines), the box cleared, waiting for allez */
-  private settle() {
+  private settle(youStay = false) {
     const [A, B] = this.fencers;
-    A.reset(this.lines[0]); B.reset(this.lines[1]);
+    // (you, after a warm-up, stay where you took up your guard; they're on their line)
+    if (!youStay) A.reset(this.lines[0]);
+    B.reset(this.lines[1]);
     this.box.reset();
     this.call = '';
     this.peak = [0, 0];

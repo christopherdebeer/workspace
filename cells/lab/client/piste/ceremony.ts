@@ -30,11 +30,13 @@ export class Ceremony {
   private guardAt = -1;
   /** the prelude: whether it begins with loosening (no warm-up before it), and when the salute began */
   private loosen = true; private saluteAt = -1;
+  /** the prelude after a warm-up: you've taken up your guard where you are; only the opponent makes ready */
+  private youStay = false;
 
   constructor(seed = 1) { this.seed = seed; }
 
-  begin(rite: Rite, n = 0, o: { loosen?: boolean } = {}) {
-    this.rite = rite; this.t = 0; this.arrived = [-1, -1]; this.guardAt = -1; this.saluteAt = -1; this.loosen = o.loosen ?? true;
+  begin(rite: Rite, n = 0, o: { loosen?: boolean; youStay?: boolean } = {}) {
+    this.rite = rite; this.t = 0; this.arrived = [-1, -1]; this.guardAt = -1; this.saluteAt = -1; this.loosen = o.loosen ?? true; this.youStay = !!o.youStay;
     // (who shakes their arm out on the way back, and when: a little different each time)
     const r = (k: number) => { const x = Math.sin((this.seed + n * 7.31 + k * 3.7) * 12.9898) * 43758.5453; return x - Math.floor(x); };
     this.shakeAt = [r(1) < 0.6 ? 0.6 + 0.8 * r(2) : -1, r(3) < 0.7 ? 0.5 + 0.9 * r(4) : -1];
@@ -55,11 +57,13 @@ export class Ceremony {
     }
     if (this.rite === 'prelude') {
       // (loosen, if there was no warm-up; back to the lines; salute; on guard)
-      fencers.forEach((f, i) => { if (Math.abs(f.s - lines[i]) < 0.03 && this.arrived[i] < 0) this.arrived[i] = t; });
+      fencers.forEach((f, i) => { if ((Math.abs(f.s - lines[i]) < 0.03 || (i === 0 && this.youStay)) && this.arrived[i] < 0) this.arrived[i] = t; });
       const ready = this.arrived[0] >= 0 && this.arrived[1] >= 0;
       if (this.saluteAt < 0 && ready && t > (this.loosen ? RITE.loosen : 0.3)) this.saluteAt = t;
       const salute = this.saluteAt, guard = salute < 0 ? Infinity : salute + RITE.salute;
       fencers.forEach((f, i) => {
+        // (you, after a warm-up, are already on guard where you came to rest: left to yourself)
+        if (i === 0 && this.youStay) { f.scene = null; return; }
         const shake = i === 0 ? 0.15 : 0.45;
         const arm: Scene['arm'] = salute < 0 ? (this.loosen && t > shake && t < shake + 1.3 ? 'shake' : 'down') : t < guard ? 'salute' : 'guard';
         const armT = arm === 'shake' ? t - shake : arm === 'salute' ? t - salute : 0;
@@ -88,6 +92,8 @@ export class Ceremony {
     return false;
   }
 
+  /** whether you stay where you are when the prelude ends (you took up your guard there) */
+  get stays() { return this.youStay; }
   /** in the prelude, seconds until the fencers are on guard (a countdown over the salute), or null before the salute */
   countdown(): number | null { return this.rite === 'prelude' && this.saluteAt >= 0 ? Math.max(0, this.saluteAt + RITE.salute + RITE.guard - this.t) : null; }
 
