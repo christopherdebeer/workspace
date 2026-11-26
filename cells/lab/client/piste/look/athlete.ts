@@ -105,7 +105,15 @@ interface LoftOpt {
   /** fabric: (circumference uv, along uv, distance to a seam) are worked out from the shape */
   fit?: (p: V) => V;
   /** a garment piece the cloth simulation may take over */
-  cloth?: { kind: ClothPiece['kind']; joint?: number };
+  cloth?: { kind: ClothPiece['kind']; joint?: number; pins?: number[] };
+  /** cells left open (an armhole): the quad between rings i, i+1 and columns j, j+1 */
+  hole?: (i: number, j: number) => boolean;
+  /** sewn: another piece's edge (its vertices and places, any number of them) joined to this one's first ring by a
+   * band of triangles, the two edges paired by their angle round this one's first ring: they share the band's points,
+   * so they can't come apart */
+  stitch?: { v: number[]; p: V[] };
+  /** each point's place after it's lofted (and fitted): for a piece shaped onto another's edge */
+  place?: (i: number, j: number, p: V) => V;
   fold?: { driver: number; relief: (row: number, angle: number, radial: V) => number };
   panel?: number;
   panelUV?: (i: number, j: number, p: V) => [number, number];
@@ -114,16 +122,24 @@ interface LoftOpt {
   arc?: [number, number];
 }
 /** a lofted surface through rings (each ring's radius may vary round it: a shaped section), smooth normals, indexed */
-function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
-  // (closed round, or an open strip over an arc of angles: its own vertices, so its edges are clean)
+/** a loft's points, ring by ring, column by column (the last column of a closed one repeating the first) */
+function loftPoints(rings: Ring[], o: LoftOpt): V[][] {
   const S = o.seg, open = !!o.arc, J = S + 1;
   const ang = (j: number) => open ? o.arc![0] + (j / S) * (o.arc![1] - o.arc![0]) : (j / S) * Math.PI * 2;
-  const P: V[][] = rings.map((r) => Array.from({ length: J }, (_, j) => {
+  return rings.map((r, i) => Array.from({ length: J }, (_, j) => {
     const a = ang(j), [ru, rw] = r.r(a);
     const p = add(r.c, add(scale(r.u, Math.cos(a) * ru), scale(r.w, Math.sin(a) * rw)));
     p[1] += r.lift?.(a) ?? 0;
-    return o.fit ? o.fit(p) : p;
+    const q = o.fit ? o.fit(p) : p;
+    return o.place ? o.place(i, j, q) : q;
   }));
+}
+
+function loft(m: SkinMesh, rings: Ring[], o: LoftOpt): { base: number; R: number; J: number; P: V[][] } {
+  // (closed round, or an open strip over an arc of angles: its own vertices, so its edges are clean)
+  const S = o.seg, open = !!o.arc, J = S + 1;
+  const ang = (j: number) => open ? o.arc![0] + (j / S) * (o.arc![1] - o.arc![0]) : (j / S) * Math.PI * 2;
+  const P: V[][] = loftPoints(rings, o);
   const R = rings.length;
   const nb = (j: number) => open ? [Math.max(0, j - 1), Math.min(J - 1, j + 1)] : [(j + S - 1) % S, (j + 1) % S];
   // A second cut of the same panel supplies displacement AND the changing normal.
@@ -175,7 +191,20 @@ function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
     }
   }
   if (o.cloth) m.pieces.push({ ...o.cloth, base, R, J, closed: !open });
+  if (o.stitch && !open) {
+    const r0 = rings[0], around = (q: V) => { const d = sub(q, r0.c); const a = Math.atan2(dot(d, r0.w), dot(d, r0.u)); return a < 0 ? a + Math.PI * 2 : a; };
+    const A = o.stitch.v.map((v, k) => ({ v, a: around(o.stitch!.p[k]) })).sort((x, y) => x.a - y.a);
+    const Bs = Array.from({ length: J }, (_, j) => ({ v: base + j, a: ang(j) }));
+    A.push({ v: A[0].v, a: A[0].a + Math.PI * 2 });
+    if (A[0].a > 0) { /* (the band starts at this piece's column 0: the edge's last point before it, brought round) */ A.unshift({ v: A[A.length - 2].v, a: A[A.length - 2].a - Math.PI * 2 }); A.pop(); A.push({ v: A[0].v, a: A[0].a + Math.PI * 2 }); }
+    let ia = 0, ib = 0;
+    while (ia < A.length - 1 || ib < Bs.length - 1) {
+      const na = ia < A.length - 1 ? A[ia + 1].a : Infinity, nb2 = ib < Bs.length - 1 ? Bs[ib + 1].a : Infinity;
+      if (na <= nb2) { m.tri(A[ia].v, Bs[ib].v, A[ia + 1].v); ia++; } else { m.tri(A[ia].v, Bs[ib].v, Bs[ib + 1].v); ib++; }
+    }
+  }
   for (let i = 0; i < R - 1; i++) for (let j = 0; j < S; j++) {
+    if (o.hole?.(i, j)) continue;
     const a = base + i * J + j, b = base + i * J + (j + 1) % J, c = base + (i + 1) * J + (j + 1) % J, d = base + (i + 1) * J + j;
     m.tri(a, d, c); m.tri(a, c, b);
   }
@@ -188,6 +217,7 @@ function loft(m: SkinMesh, rings: Ring[], o: LoftOpt) {
   };
   if (o.capA) cap(0, true);
   if (o.capB) cap(R - 1, false);
+  return { base, R, J, P };
 }
 
 /** a weight shared between two bones across a zone (0 before it, 1 after it) */
@@ -224,8 +254,13 @@ function axesAbout(d: V, hint: V): [V, V] { const u = perp(hint, d); return [u, 
 
 /** a garment piece the cloth simulation can take over (look/cloth.ts): a loft's grid of R rings by J columns from
  * vertex `base` (closed round: the last column repeats the first), what it is, and where its joint falls (row fraction) */
-export interface ClothPiece { kind: 'jacket' | 'sleeveW' | 'sleeveR' | 'breeches'; joint?: number; base: number; R: number; J: number; closed: boolean }
+export interface ClothPiece { kind: 'jacket' | 'sleeveW' | 'sleeveR' | 'breeches'; joint?: number; base: number; R: number; J: number; closed: boolean;
+  /** vertices held to the skin (an armhole's edge, where a sleeve is sewn on, and the cloth cut out inside it) */
+  pins?: number[] }
 export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number; pieces: ClothPiece[] }
+
+/** where the garments were sewn, as the last athlete built them (for devtools/piste-seams.mjs) */
+export const SEAMS: { what: string; rows: number[]; cols: number[]; heights: number[] }[] = [];
 
 export function buildAthlete(): Athlete {
   const f = new Fencer(EPEE, 0, 1);
@@ -281,17 +316,48 @@ export function buildAthlete(): Athlete {
       const dr = waist + lower + reach + hem;
       return [ru + dr, rw * (front < 0 ? 1 + full * 8 * front ** 2 : 1 - 0.04 * front ** 2) + dr];
     }, lift: a => 0.018 * Math.cos(a + 0.35) * (1 - blend(h, -0.09, 0.08)) + 0.013*Math.cos(a)*Math.exp(-(((h-0.43)/0.095)**2))
-      // (the hem cut up over each thigh, the hip line's way, so the legs come out of the hips, and low between them where
-      // the crotch strap holds it)
-      + 0.05 * Math.cos(a) ** 2 * (1 - blend(h, -0.09, 0.02)) };
+      };
   });
-  loft(m, torsoRings, {
+  // the armholes: where each sleeve is sewn on, a patch of the jacket's grid round the shoulder, a little below the joint
+  // where the arm hangs from it, cut out. Its edge (36 points) is the sleeve's first ring (below)
+  const TS = 48, TJ = TS + 1, torsoP = loftPoints(torsoRings, { seg: TS, fit: fitShoulder } as LoftOpt);
+  const armhole = (joint: V, toward: V) => {
+    // (the cells the arm's tube passes through, near the shoulder: a bounding patch of the grid round them)
+    const ax = norm(sub(toward, joint)), a0 = madd(joint, ax, -0.03), a1 = madd(joint, ax, 0.03);
+    const offAxis = (q: V) => { const t = Math.max(0, Math.min(1, dot(sub(q, a0), sub(a1, a0)) / dot(sub(a1, a0), sub(a1, a0)))); return len(sub(q, lerp(a0, a1, t))); };
+    let jc = 0, best = Infinity;
+    for (let i = 30; i < 66; i++) for (let j = 0; j < TS; j++) { const d = len(sub(torsoP[i][j], joint)); if (d < best) { best = d; jc = j; } }
+    let i0 = 99, i1 = -1, d0 = 99, d1 = -99;
+    for (let i = 30; i < 66; i++) for (let dj = -12; dj <= 12; dj++) {
+      const j = ((jc + dj) % TS + TS) % TS, jn = (j + 1) % TS;
+      const q = scale(add(add(torsoP[i][j], torsoP[i + 1][j]), add(torsoP[i][jn], torsoP[i + 1][jn])), 0.25);
+      if (offAxis(q) < 0.058) { i0 = Math.min(i0, i); i1 = Math.max(i1, i + 1); d0 = Math.min(d0, dj); d1 = Math.max(d1, dj + 1); }
+    }
+    // (no higher than the top of the shoulder, below where the jacket narrows into its collar: the jacket's shoulder
+    // covers the cap's top there, as a shoulder seam does)
+    i1 = Math.min(i1, 59); i0 = Math.min(i0, i1 - 6);
+    const j0 = jc + d0, j1 = jc + d1;
+    const col = (j: number) => ((j % TS) + TS) % TS;
+    const loop: [number, number][] = [];
+    for (let j = j0; j < j1; j++) loop.push([i0, col(j)]);
+    for (let i = i0; i < i1; i++) loop.push([i, col(j1)]);
+    for (let j = j1; j > j0; j--) loop.push([i1, col(j)]);
+    for (let i = i1; i > i0; i--) loop.push([i, col(j0)]);
+    const inside = (i: number, j: number) => i >= i0 && i < i1 && col(j - j0) < j1 - j0;
+    const all: [number, number][] = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) all.push([i, col(j)]);
+    return { loop, inside, all, pts: loop.map(([i, j]) => torsoP[i][j]), joint, ax, rows: [i0, i1], cols: [col(j0), col(j1)] };
+  };
+  const holes = [armhole(f.shoulder, f.elbow), armhole(c[7].a, c[7].b)];
+  SEAMS.length = 0;
+  holes.forEach((h, k) => SEAMS.push({ what: k ? 'rear armhole' : 'weapon armhole', rows: h.rows, cols: h.cols, heights: h.rows.map((i) => torsoP[i][0][1] - hy) }));
+  const torso = loft(m, torsoRings, {
+    hole: (i, j) => holes.some((h) => h.inside(i, j)),
     fold: { driver: 4, relief: (row,a) => {
       const front = 0.5-0.5*Math.sin(a);
       return front*(0.012*pleat(row,0.50+0.16*Math.cos(a),0.035)
         - 0.009*pleat(row,0.39+0.10*Math.cos(a),0.045));
     } },
-    cloth: { kind: 'jacket' }, fit: fitShoulder, panel: 0, seg: 48, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
+    cloth: { kind: 'jacket', pins: [] }, fit: fitShoulder, panel: 0, seg: TS, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
     weights: (i, j, p) => {
       const h = p[1] - hy, k = blend(h, 0.18, 0.4);
       const w: W = [[B.pelvis, 1 - k], [B.chest, k]];
@@ -305,9 +371,15 @@ export function buildAthlete(): Athlete {
     },
     extra: (i, j, p) => [Math.max(0, 1 - (p[1] - hy + 0.09) / 0.14), 0, 0, PART.torso],
   });
+  // (the jacket's cloth held to the skin round each armhole, where a sleeve is sewn on, and inside it, where nothing shows)
+  m.pieces[m.pieces.length - 1].pins = holes.flatMap((h) => h.all.flatMap(([i, j]) => j === 0 ? [torso.base + i * TJ, torso.base + i * TJ + TS] : [torso.base + i * TJ + j]));
+  const vertexWeights = (v: number): W => { const k = v * SKIN_STRIDE; return [0, 1, 2, 3].map((q) => [m.v[k + 12 + q], m.v[k + 16 + q]] as [number, number]).filter((e) => e[1] > 0); };
 
   // ── sleeves: the cap out of the shoulder, full through the upper arm, the elbow, the forearm to the cuff ──────────
-  const sleeve = (pts: V[], up1: number, fore: number, partTop: number, armSign: number) => {
+  // (each sleeve sewn onto its armhole: its first ring is the armhole's edge, the jacket's own points; over its first
+  // few rings it goes from the armhole's shape to its own round one, and from the jacket's weights to its own)
+  const SS = 36, SEW = 6;
+  const sleeve = (pts: V[], up1: number, fore: number, partTop: number, armSign: number, seam: ReturnType<typeof armhole>) => {
     const pa = path(pts), sE = pa.joints[0], N = 55;
     const rings: Ring[] = [];
     for (let i = 0; i < N; i++) {
@@ -316,28 +388,46 @@ export function buildAthlete(): Athlete {
       const [u, w] = axesAbout(tangent, F.u);
       // (fitted to an athlete's arm with a sleeve's ease: about 36 cm round the upper arm, 31 round the forearm, measured by
       // devtools/piste-proportions.mjs; the cap fuller where it's set into the shoulder)
-      const r = prof([[0, 0.064], [0.07, 0.074], [0.16, 0.064], [sE - 0.06, 0.054], [sE, 0.052], [sE + 0.1, 0.05], [0.85, 0.044], [1, 0.041]], s);
+      // (the rear sleeve's cuff closes onto the bare wrist: its open end doesn't show)
+      const r = prof([[0, 0.052], [0.07, 0.064], [0.16, 0.063], [sE - 0.06, 0.054], [sE, 0.052], [sE + 0.1, 0.05], [0.85, 0.044], [1, armSign > 0 ? 0.041 : 0.03]], s);
       rings.push({ c: p, u, w, r: a => {
         const lift = Math.cos(a + armSign * 0.6);
         const inside = 0.44 + 0.38 * lift;
         const elbow = pleat(s, sE - 0.09 + 0.055 * lift, 0.031) * 0.012
           + pleat(s, sE + 0.04 - 0.045 * Math.sin(a), 0.025) * 0.010;
         const cuff = pleat(s, 0.86 + 0.045 * lift, 0.026) * 0.006;
-        const dr = elbow * inside + cuff + 0.004 * Math.cos(3*a + 2*s) * Math.sin(Math.PI*s);
+        // (the rear cuff's edge kept round, closed on the wrist: no wave in it)
+        const dr = elbow * inside + (armSign > 0 ? cuff : cuff * (1 - blend(s, 0.8, 0.9))) + 0.004 * Math.cos(3*a + 2*s) * Math.sin(Math.PI*s) * (armSign > 0 ? 1 : 1 - blend(s, 0.8, 0.95));
         return [r + dr, r * 0.93 + dr];
       } });
     }
+    // the armhole's edge, and for each of the sleeve's columns the nearest of its points round the first ring (whose
+    // weights the sleeve's first rings ease from)
+    const r0 = rings[0], around = (q: V) => { const d = sub(q, r0.c); const a = Math.atan2(dot(d, r0.w), dot(d, r0.u)); return a < 0 ? a + Math.PI * 2 : a; };
+    const edgeV = seam.loop.map(([i, j]) => torso.base + i * TJ + j), edgeA = seam.pts.map(around);
+    const nearest = (j: number) => { const a = (j / SS) * Math.PI * 2; let bk = 0, bd = 9; edgeA.forEach((e, k) => { const d = Math.abs(((e - a + 3 * Math.PI) % (2 * Math.PI)) - Math.PI); if (d < bd) { bd = d; bk = k; } }); return edgeV[bk]; };
+    const sewn = (i: number) => smooth(Math.min(1, i / SEW));
     // the inside of the elbow (toward the chord from shoulder to wrist) gathers as it bends
     const E = pts[1], inner = norm(sub(lerp(pts[0], pts[2], 0.5), E));
     loft(m, rings, {
+      stitch: { v: edgeV, p: seam.pts },
       fold: { driver: armSign > 0 ? 0 : 1, relief: (row,a,radial) => {
         const compression = 0.12 + 0.88 * smooth((1 + dot(radial,inner)) * 0.5);
         // Two oblique gathers form at the inside elbow and flatten across the outside.
         return compression*(0.014*pleat(row,sE-0.13+0.045*Math.sin(a),0.031)
           + 0.011*pleat(row,sE+0.055-0.041*Math.cos(a),0.027));
       } },
-      cloth: { kind: armSign > 0 ? 'sleeveW' : 'sleeveR', joint: sE }, fit: fitShoulder, panel: 1, seg: 32, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
-      weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.4 * (1 - smooth(blend(s, 0, 0.2))); return [[B.chest,yoke], [up1, 1 - k - yoke], [fore, k]]; },
+      cloth: { kind: armSign > 0 ? 'sleeveW' : 'sleeveR', joint: sE }, fit: fitShoulder, panel: 1, seg: SS, col: white, mat: fab, tone: TONE.jacket, seams: [0.5],
+      weights: (i, j) => {
+        const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); const yoke = 0.4 * (1 - smooth(blend(s, 0, 0.2)));
+        const own: W = [[B.chest, yoke], [up1, 1 - k - yoke], [fore, k]];
+        if (i >= SEW) return own;
+        // (near the seam, toward the jacket's weights at the armhole: sewn, they move as one)
+        const t = sewn(i), w: Map<number, number> = new Map();
+        for (const [b, x] of vertexWeights(nearest(j))) w.set(b, (w.get(b) ?? 0) + x * (1 - t));
+        for (const [b, x] of own) w.set(b, (w.get(b) ?? 0) + x * t);
+        return [...w];
+      },
       extra: (i, j, p) => {
         const s = i / (N - 1), near = Math.max(0, 1 - Math.abs(s - sE) / 0.13), face = Math.max(0, dot(norm(sub(p, rings[i].c)), inner));
         return [0, armSign * Math.min(1, s * 1.4) * 0.8, armSign * near * face, armSign < 0 || s < sE - 0.14 ? partTop : PART.always];
@@ -345,28 +435,45 @@ export function buildAthlete(): Athlete {
     });
   };
   const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.092);
-  // (each sleeve set in at the top of the shoulder, a little in from the joint, its cap over the jacket's shoulder edge)
-  sleeve([madd(madd(lerp(f.shoulder, c[7].a, 0.1), up, 0.028), F.r, -0.02), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
-  sleeve([madd(madd(lerp(c[7].a, f.shoulder, 0.1), up, 0.012), F.r, 0.012), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
+  // (each sleeve's own first ring at its shoulder joint, a little out along the arm, the armhole's edge sewn to it)
+  sleeve([madd(madd(f.shoulder, holes[0].ax, 0.015), up, -0.01), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1, holes[0]);
+  // (the rear sleeve runs on over the bare wrist, closed onto it, so its open end is filled)
+  sleeve([madd(madd(c[7].a, holes[1].ax, 0.015), up, -0.015), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.018)], B.upperR, B.foreR, PART.rearArm, -1, holes[1]);
 
-  // An inset gusset closes the small opening between the two leg tops under the hem.
-  const gusset: Ring[] = Array.from({ length: 12 }, (_, i) => {
+  // The seat: closes the opening between the two leg tops, inside the jacket's hem and the legs. It goes with the pelvis
+  // (only its lowest rings take a little of each thigh), so a thigh turning in guard doesn't carry it out through the hem
+  const seat: Ring[] = Array.from({ length: 12 }, (_, i) => {
     const t = i / 11;
-    return { c: madd(pelvis, up, -0.109 + t * 0.096), u: hipLine, w: norm(cross(hipLine, up)),
-      lift: a => 0.028 * Math.cos(a) ** 2 * (1 - t),
-      r: () => [0.040 + 0.080 * t, 0.040 + 0.044 * t] };
+    return { c: madd(pelvis, up, -0.105 + t * 0.09), u: hipLine, w: norm(cross(hipLine, up)), r: () => [0.032 + 0.07 * t, 0.032 + 0.05 * t] };
   });
-  loft(m, gusset, { panel: 2, seg: 32, col: white, mat: fab, tone: TONE.breeches, capA: true,
+  loft(m, seat, { panel: 2, seg: 32, col: white, mat: fab, tone: TONE.breeches, capA: true,
     weights: (i, j) => {
-      const thigh = 0.84 * (1 - smooth(i / 11));
+      const thigh = 0.35 * (1 - smooth(i / 11));
       const front = smooth((1 + Math.cos(j * Math.PI / 16)) / 2);
       return [[B.pelvis, 1 - thigh], [B.thighF, thigh * front], [B.thighB, thigh * (1 - front)]];
     }, extra: () => [0, 0, 0, PART.torso] });
 
+  // The crotch strap: from the jacket's hem in front, between the legs, to its hem behind (it holds the jacket down
+  // in a lunge). Front and back are the hem's points facing the chest's way (the fencer's left, −r) and the back's
+  {
+    const hem = torsoP[0].slice(0, TS);
+    const facing = (dir: V) => hem.reduce((bk, q, k) => (dot(sub(q, torsoRings[0].c), dir) > dot(sub(hem[bk], torsoRings[0].c), dir) ? k : bk), 0);
+    const fr = madd(madd(hem[facing(scale(F.r, -1))], up, 0.012), F.r, 0.004), bk = madd(madd(hem[facing(F.r)], up, 0.012), F.r, -0.004);
+    const pa = path([fr, madd(pelvis, up, -0.122), bk]), NS = 16;
+    const strap: Ring[] = Array.from({ length: NS }, (_, i) => {
+      const s2 = i / (NS - 1), { p: q } = pa.at(s2), tangent = norm(sub(pa.at(Math.min(1, s2 + 0.05)).p, pa.at(Math.max(0, s2 - 0.05)).p));
+      const [u, w] = axesAbout(tangent, F.f);
+      return { c: q, u, w, r: () => [0.022, 0.0035] };
+    });
+    loft(m, strap, { seg: 10, col: white, mat: fab, tone: TONE.jacket, capA: true, capB: true, weights: () => [[B.pelvis, 1]], extra: () => [0, 0, 0, PART.torso] });
+  }
+
   // ── legs: breeches full to below the knee, the band, the knee and calf under the sock, the ankle ───────────────────
   const leg = (th: number, sh: number, pole: V) => {
     const hip = c[th].a, knee = c[th].b, ankle = madd(c[sh].b, up, 0.035);
-    const pa = path([madd(hip, up, 0.07), knee, ankle]), sK = pa.joints[0], N = 48, band = sK + 0.07;
+    // (the leg's top is inside the jacket, at the hip, and goes mostly with the pelvis: a thigh tilting in guard doesn't
+    // carry it out through the hem)
+    const pa = path([madd(hip, up, 0.015), knee, ankle]), sK = pa.joints[0], N = 48, band = sK + 0.07;
     const rings: Ring[] = [], mats: number[] = [], tones: number[] = [];
     const add1 = (s: number, tone: number) => {
       const { p } = pa.at(s), tangent = norm(sub(pa.at(Math.min(1, s+0.045)).p, pa.at(Math.max(0, s-0.045)).p));
@@ -377,7 +484,7 @@ export function buildAthlete(): Athlete {
       // below the band to about 39 and narrows to the ankle. Measured by devtools/piste-proportions.mjs)
       // (the knee is found from in front by the kneecap standing out of a leg that's narrowest just above and below
       // it, not by the band's edge; the breeches gathered in under it to the band)
-      const r = tone === TONE.breeches ? prof([[0, 0.11], [0.3, 0.097], [sK - 0.1, 0.071], [sK - 0.03, 0.064], [sK + 0.015, 0.066], [band, 0.055]], s) : prof([[band, 0.054], [band + 0.04, 0.054], [sK + 0.17, 0.052], [0.8, 0.043], [1, 0.039]], s);
+      const r = tone === TONE.breeches ? prof([[0, 0.092], [0.12, 0.1], [0.3, 0.097], [sK - 0.1, 0.071], [sK - 0.03, 0.064], [sK + 0.015, 0.066], [band, 0.055]], s) : prof([[band, 0.054], [band + 0.04, 0.054], [sK + 0.17, 0.052], [0.8, 0.043], [1, 0.039]], s);
       rings.push({ c: p, u, w, r: (a) => { const ca = Math.cos(a);
         const dr = tone === TONE.breeches ? (0.007 * pleat(s, sK-0.08+0.052*ca, 0.022)
           + 0.005 * pleat(s, sK-0.015-0.029*Math.sin(a), 0.017)
@@ -390,7 +497,7 @@ export function buildAthlete(): Athlete {
     };
     for (let i = 0; i < N; i++) { const s = (i / (N - 1)) * band; add1(s, TONE.breeches); }
     const leg1 = rings.splice(0), tone1 = tones.splice(0); mats.splice(0);
-    const wts = (s: number): W => { const k = blend(s, sK - 0.06, sK + 0.06), hipK = 1 - blend(s, 0, 0.14); return [[th === 9 ? B.thighF : B.thighB, (1 - k) * (1 - hipK * 0.5)], [sh === 10 ? B.shinF : B.shinB, k], [B.pelvis, (1 - k) * hipK * 0.5]]; };
+    const wts = (s: number): W => { const k = blend(s, sK - 0.06, sK + 0.06), hipK = 1 - smooth(blend(s, 0, 0.2)); return [[th === 9 ? B.thighF : B.thighB, (1 - k) * (1 - hipK * 0.75)], [sh === 10 ? B.shinF : B.shinB, k], [B.pelvis, (1 - k) * hipK * 0.75]]; };
     loft(m, leg1, { fold: { driver: th === 9 ? 2 : 3, relief: (row,a) => {
       const slack = 0.5-0.5*Math.cos(a);
       return slack*(0.013*pleat(row,0.78+0.06*Math.sin(a),0.045)
@@ -401,7 +508,12 @@ export function buildAthlete(): Athlete {
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
     for (let i = 0; i < 14; i++) { const s = band + (1 - band) * (i / 13); add1(s, TONE.sock); }
     const leg2 = rings.splice(0);
-    loft(m, leg2, { seg: 14, col: white, mat: fab, tone: TONE.sock, capB: true, weights: (i) => { const s = band + (1 - band) * (i / 13); return wts(s); } });
+    // (the sock's foot end goes with the foot, inside the shoe's opening: turned out, the two turn together, no gap)
+    const footBone = th === 9 ? B.footF : B.footB;
+    loft(m, leg2, { seg: 14, col: white, mat: fab, tone: TONE.sock, capB: true, weights: (i) => {
+      const s = band + (1 - band) * (i / 13), k = smooth(blend(s, 0.9, 1)), w = wts(s).map(([b, x]) => [b, x * (1 - k)] as [number, number]);
+      return k > 0 ? [...w, [footBone, k]] : w;
+    } });
   };
   leg(9, 10, add(F.f, [0, 0.2, 0]));
   leg(11, 12, add(add(scale(F.f, -0.3), scale(F.r, -0.8)), [0, 0.2, 0]));

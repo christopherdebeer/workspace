@@ -369,6 +369,8 @@ recorder?.reset();
 // following the fencers ────────────────────────────────────────────────────────────────────────────────────────────
 const cam = { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0, 0] as V, used: false };
 function resetCam() { cam.yaw = cam.pitch = 0; cam.zoom = 1; cam.pan = [0, 0, 0]; cam.used = false; }
+// (`orbit=yaw,pitch,zoom,panX,panY,panZ` sets it from the address: for the devtools to look from an angle)
+if (qs.has('orbit')) { const [y, p2, z, px, py, pz] = (qs.get('orbit') ?? '').split(',').map(Number); cam.yaw = y || 0; cam.pitch = p2 || 0; cam.zoom = z || 1; cam.pan = [px || 0, py || 0, pz || 0]; cam.used = true; }
 const watchable = () => !!replay || auto;
 /** the view as the hand has moved it: orbited about where it looks, nearer or further, and shifted */
 function byHand(v: View): View {

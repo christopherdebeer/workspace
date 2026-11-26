@@ -229,16 +229,17 @@ export class GpuCloth {
     this.pieces = new Int32Array(20);
     let off = 0;
     ps.forEach((p, k) => {
-      const S = p.J - 1;
+      const S = p.J - 1, pins = new Set(p.pins ?? []);
       this.pieces.set([p.base, p.R, p.J, off], k * 4);
       for (let r = 0; r < p.R; r++) for (let c = 0; c < S; c++) {
         const v = (p.base + r * p.J + c) * SKIN_STRIDE, t = (off + r * S + c) * 4;
-        bind.set([V[v], V[v + 1], V[v + 2], ease(p, r / (p.R - 1))], t);
+        const pinned = pins.has(p.base + r * p.J + c);
+        bind.set([V[v], V[v + 1], V[v + 2], pinned ? 0 : ease(p, r / (p.R - 1))], t);
         bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);
         jt.set(V.subarray(v + 12, v + 16), t); wt.set(V.subarray(v + 16, v + 20), t);
         metaA.set([r, c, p.R, S], t); // (MetaB: first texel; thickness, negative for a piece the arms don't press (the sleeves themselves); backstop
         // inset; ease. Packed so the solver reads ten textures: phones allow sixteen, and the renderer keeps three)
-        metaB.set([off, (p.kind.startsWith('sleeve') ? -1 : 1) * thickness(p), 0.002, ease(p, r / (p.R - 1))], t);
+        metaB.set([off, (p.kind.startsWith('sleeve') ? -1 : 1) * thickness(p), 0.002, pinned ? 0 : ease(p, r / (p.R - 1))], t);
       }
       off += p.R * S;
     });
