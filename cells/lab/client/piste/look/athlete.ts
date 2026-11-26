@@ -308,7 +308,9 @@ export function buildAthlete(): Athlete {
       const s = i / (N - 1), { p } = pa.at(s);
       const tangent = norm(sub(pa.at(Math.min(1, s+0.065)).p, pa.at(Math.max(0, s-0.065)).p));
       const [u, w] = axesAbout(tangent, F.u);
-      const r = prof([[0, 0.055], [0.07, 0.082], [0.16, 0.077], [sE - 0.06, 0.06], [sE, 0.057], [sE + 0.1, 0.055], [0.85, 0.046], [1, 0.041]], s);
+      // (fitted to an athlete's arm with a sleeve's ease: about 36 cm round the upper arm, 31 round the forearm, measured by
+      // devtools/piste-proportions.mjs; the cap fuller where it's set into the shoulder)
+      const r = prof([[0, 0.052], [0.07, 0.07], [0.16, 0.064], [sE - 0.06, 0.054], [sE, 0.052], [sE + 0.1, 0.05], [0.85, 0.044], [1, 0.041]], s);
       rings.push({ c: p, u, w, r: a => {
         const lift = Math.cos(a + armSign * 0.6);
         const inside = 0.44 + 0.38 * lift;
@@ -363,13 +365,15 @@ export function buildAthlete(): Athlete {
       const { p } = pa.at(s), tangent = norm(sub(pa.at(Math.min(1, s+0.045)).p, pa.at(Math.max(0, s-0.045)).p));
       const [u, w] = axesAbout(tangent, pole);
       // (the kneecap at the front of the knee; the calf full at the back; breeches loose above the band)
-      const kneeK = Math.max(0, 1 - Math.abs(s - sK) / 0.06), calfK = Math.max(0, 1 - Math.abs(s - (sK + 0.2)) / 0.14);
-      const r = tone === TONE.breeches ? prof([[0, 0.118], [0.3, 0.108], [sK - 0.05, 0.084], [band, 0.068]], s) : prof([[band, 0.063], [band + 0.04, 0.057], [sK + 0.2, 0.056], [0.85, 0.042], [1, 0.039]], s);
+      const kneeK = Math.max(0, 1 - Math.abs(s - sK) / 0.06), calfK = Math.max(0, 1 - Math.abs(s - (sK + 0.19)) / 0.15);
+      // (fitted: about 62 cm round the upper thigh, 46 above the knee, 42 at it; under the sock a calf that fills out
+      // below the band to about 39 and narrows to the ankle. Measured by devtools/piste-proportions.mjs)
+      const r = tone === TONE.breeches ? prof([[0, 0.11], [0.3, 0.097], [sK - 0.08, 0.072], [sK, 0.064], [band, 0.06]], s) : prof([[band, 0.058], [band + 0.05, 0.059], [sK + 0.19, 0.061], [0.85, 0.043], [1, 0.039]], s);
       rings.push({ c: p, u, w, r: (a) => { const ca = Math.cos(a);
-        const dr = tone === TONE.breeches ? (0.010 * pleat(s, sK-0.08+0.052*ca, 0.022)
-          + 0.007 * pleat(s, sK-0.015-0.029*Math.sin(a), 0.017)
+        const dr = tone === TONE.breeches ? (0.007 * pleat(s, sK-0.08+0.052*ca, 0.022)
+          + 0.005 * pleat(s, sK-0.015-0.029*Math.sin(a), 0.017)
           + 0.008 * pleat(s, 0.16+0.09*ca, 0.032)) : 0;
-        return [r * (1 + (ca > 0 ? 0.18 * kneeK * ca : 0.22 * calfK * -ca)) + dr, r * 0.94 + dr]; } });
+        return [r * (1 + (ca > 0 ? 0.14 * kneeK * ca : 0.26 * calfK * -ca)) + dr, r * 0.94 + dr]; } });
       mats.push(MAT.fabric); tones.push(tone);
     };
     for (let i = 0; i < N; i++) { const s = (i / (N - 1)) * band; add1(s, TONE.breeches); }
@@ -381,7 +385,7 @@ export function buildAthlete(): Athlete {
         + 0.009*pleat(row,0.88-0.025*Math.sin(a),0.03));
     } }, cloth: { kind: 'breeches', joint: sK / band }, panel: 2, seg: 32, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
     // the band: a narrow cuff, a little proud
-    const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.07, 0.067] }; });
+    const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.063, 0.06] }; });
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
     for (let i = 0; i < 14; i++) { const s = band + (1 - band) * (i / 13); add1(s, TONE.sock); }
     const leg2 = rings.splice(0);
@@ -462,7 +466,7 @@ export function buildAthlete(): Athlete {
     seg: 72, col: () => [0.26, 0.25, 0.22], mat: () => MAT.rubber, weights: () => hw, extra: hx,
   });
   // A bias-bound apron leaves the sides of the collar in shadow and lies flat over the sternum.
-  const bibArc: [number, number] = [-2.02, 2.02];
+  const bibArc: [number, number] = [-1.45, 1.45];
   const bibRow = (t: number, piping = 0): Ring => ({
     c: lerp(madd(hc, up, -0.087), madd(neck, up, -0.030), t),
     u: fwd, w: side,
