@@ -40,7 +40,7 @@ const assist = preview ? 0 : qs.has('assist') ? clamp(Number(qs.get('assist')) |
  * The study: five seconds in the room, nearly uneventful, to judge the look by: the opponent takes one step closer, you
  * roll your wrist a little, both settle (and again). Can you feel how much distance closed, and see what your hand did?
  */
-const study = qs.has('study'), clothStudy = qs.get('study') === 'cloth';
+const study = qs.has('study'), clothStudy = qs.get('study') === 'cloth', retreatStudy = qs.get('study') === 'retreat';
 /** look flags: the figures as plain grey models; the contact capsules over them */
 const clay = qs.has('clay'), bodies = qs.has('bodies');
 const replays = !preview && !study && qs.get('replay') !== '0';
@@ -73,7 +73,8 @@ const studyThem: Controller = { intent: () => {
   // (each lap from the en garde lines again)
   if (lap !== studyLap) { studyLap = lap; bout.place(3.32); }
   const I = { ...idle(), extend: 0.12 };
-  if (t >= STUDY.step && studyStepped !== lap) { studyStepped = lap; I.step = 'advance'; }
+  // (`study=retreat`: a step back instead, to judge the figure mid-retreat, as it's most often seen)
+  if (t >= STUDY.step && studyStepped !== lap) { studyStepped = lap; I.step = retreatStudy ? 'retreat' : 'advance'; }
   return I;
 } };
 
