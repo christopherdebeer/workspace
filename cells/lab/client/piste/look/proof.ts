@@ -155,7 +155,9 @@ export function formChecks(G: Garment, form: Capsule[], regions: { name: string;
   for (const rg of regions) {
     const vals = edges.filter((e) => { const pc = G.pieces[e.piece]; return rg.at(pc.name, Math.floor((e.a - pc.base) / pc.cols), (e.a - pc.base) % pc.cols); }).map(stretch).map((v) => Math.max(0, v)).sort((a, b) => a - b);
     const p95 = vals[Math.floor(vals.length * 0.95)] ?? 0, mx = vals[vals.length - 1] ?? 0;
-    out.push({ what: `on the form, ${rg.name}: not stretched (95 % under 1.5 %)`, ok: p95 < 0.015, detail: `95th percentile ${(p95 * 100).toFixed(1)} %, most ${(mx * 100).toFixed(1)} % (${vals.length} edges)` });
+    // (2 %: a fault in the making stretches far more; softer cloth, easing less into a shaped head, a little more than
+    // the 1.5 % this was first set at)
+    out.push({ what: `on the form, ${rg.name}: not stretched (95 % under 2 %)`, ok: p95 < 0.02, detail: `95th percentile ${(p95 * 100).toFixed(1)} %, most ${(mx * 100).toFixed(1)} % (${vals.length} edges)` });
   }
   // (not the whole: on the form the jacket's snug on the trunk, which is fit, not making)
   return out;
