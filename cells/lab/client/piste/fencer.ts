@@ -195,9 +195,10 @@ export class Fencer {
     const head = madd(madd(at(0.07, 0, -0.01, 0.7), f, K.head[0]), u, K.head[1]);
     this.eye = madd(madd(at(0.13, 0, -0.005, BODY.eye), f, K.eye[0]), u, K.eye[1]);
     // legs: hips to knees (bent, out) to feet
-    const hipF = toWorld(F, pF + 0.08, pU, 0.05), hipB = toWorld(F, pF - 0.08, pU, -0.05);
-    // (the back foot set out to the side, as a fencer stands, not on the front's line)
-    const footF = toWorld(F, this.front, 0.05 + this.frontLift, 0.05), footB = toWorld(F, this.back, 0.05 + this.backLift, -0.15);
+    const hipF = toWorld(F, pF + 0.08, pU, 0.05), hipB = toWorld(F, pF - 0.08, pU, -0.04);
+    // (the back foot square to the piste, its toes the chest's way (−r, as its knee bends), its heel on the front heel's
+    // line: so it reaches out to the side, as a fencer's does)
+    const footF = toWorld(F, this.front, 0.05 + this.frontLift, 0.05), footB = toWorld(F, this.back, 0.05 + this.backLift, -0.07);
     const kneeF = knee(hipF, footF, 0.46, 0.46, add(scale(f, 1), [0, 0.2, 0]));
     const kneeB = knee(hipB, footB, 0.46, 0.46, add(scale(f, -0.3), add(scale(r, -0.8), [0, 0.2, 0])));
     // the weapon arm reaches for the grip, just behind the guard
@@ -234,7 +235,7 @@ export class Fencer {
       { a: hipB, b: kneeB, ra: 0.1, rb: 0.08, part: 'leg' },
       { a: kneeB, b: footB, ra: 0.055, rb: 0.04, part: 'leg' },
       { a: madd(footF, f, -0.07), b: madd(footF, f, 0.15), ra: 0.045, rb: 0.04, part: 'foot' },
-      { a: madd(footB, r, -0.07), b: madd(footB, r, 0.12), ra: 0.045, rb: 0.04, part: 'foot' },
+      { a: madd(footB, r, 0.07), b: madd(footB, r, -0.12), ra: 0.045, rb: 0.04, part: 'foot' },
       { a: madd(pelvis, f, TRUNK.wide), b: madd(chest, f, TRUNK.wide), ra: TRUNK.depth, rb: TRUNK.depth, part: 'torso' },
       { a: madd(pelvis, f, -TRUNK.wide), b: madd(chest, f, -TRUNK.wide), ra: TRUNK.depth, rb: TRUNK.depth, part: 'torso' },
     ];

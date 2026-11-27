@@ -10,6 +10,7 @@
 import type { Capsule } from '../fencer';
 import type { Garment } from './draft';
 import { type V } from '../v3';
+import { FABRIC } from './cloth';
 
 export interface Settled { x: Float64Array; edges: { a: number; b: number; rest: number; dir: 'across' | 'along' | 'diag' | 'bend'; piece: number }[] }
 
@@ -26,7 +27,8 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
   });
   // (the jacket's body goes round the trunk; its sleeves round the arms too, and the gussets under them)
   const isSleeve = new Uint8Array(n); G.pieces.forEach((pc) => { if (pc.kind !== 'body') isSleeve.fill(1, pc.base, pc.base + pc.rows * pc.cols); });
-  const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 };
+  // (the kit's fabric (cloth.ts): bending as the cube of its bending length, from the 0.12 it was set at for a 3 cm cloth)
+  const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 * (FABRIC.bendingLength / 0.03) ** 3 };
   const STEP = 0.005;
   const h = 1 / 240, steps = Math.round((o.seconds ?? 6) / h), thick = o.thick ?? 0.004;
   const P = (i: number): V => [x[i * 3], x[i * 3 + 1], x[i * 3 + 2]];

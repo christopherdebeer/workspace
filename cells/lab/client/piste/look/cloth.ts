@@ -30,15 +30,37 @@ import type { Athlete, ClothPiece } from './athlete';
 import { SKIN_STRIDE } from './athlete';
 import { tailor, OFFSETS } from './tailor';
 
+/**
+ * The kit's fabric, as a textile is described (Fab's terms: client/fab/fabric.ts): its weight (g/m²), its bending length
+ * (how far a strip overhangs a table's edge before it droops to 41.5°: Peirce's cantilever, the measure of drape: it
+ * holds the weight too, a heavier cloth of the same stiffness draping softer), and its thickness (mm). A fencing jacket's
+ * cotton and polyester twill, 350 N, weighs about 1 kg (armstreet, histfenc, faitsdarmes): about 380 g/m²; drafted on
+ * its pattern its bending length is a heavy canvas's but softened by wear and washing, 2.2 cm; about 1.1 mm thick.
+ * The solver's dials are worked out from it below (calibrated to the dials it had when they were set by eye, which
+ * matched a lighter, stiffer cloth: 220 g/m², 3 cm, 0.8 mm):
+ * - bending: as the cube of the bending length (the flexural rigidity per weight is its cube);
+ * - air: drag against the cloth's motion as the inverse of its weight (a heavier cloth carries its swing further and
+ *   settles slower);
+ * - thickness: broader folds, and held further off the skin (two thicknesses and a little).
+ */
+export const FABRIC = { gsm: 380, bendingLength: 0.022, thickness: 0.0011 };
+const FAB0 = { gsm: 220, bendingLength: 0.03, thickness: 0.0008 };
 /** the cloth's dials: substep length (s), passes a substep, stiffnesses (0..1 a pass), relaxation, damping, and how
  * much of the body's motion the cloth is dragged toward each substep */
-export const CLOTH = { step: 1 / 480, maxSteps: 10, passes: 3, stretch: 1, shear: 0.6, bend: 0.5, omega: 1.4, damp: 0.995, drag: 0.04,
+export const CLOTH = { step: 1 / 480, maxSteps: 10, passes: 3, stretch: 1, shear: 0.6, bend: 0.5 * (FABRIC.bendingLength / FAB0.bendingLength) ** 3, omega: 1.4, damp: 0.995, drag: 0.04 * FAB0.gsm / FABRIC.gsm,
   /** thickness: how hard each pass pulls a point's curvature (its offset from its four neighbours' middle) toward the
    * skin's under it (a scale on each piece's own, `thickness`). Thick cloth can't crease in short waves; it folds in
    * broad ones */
-  thick: 1,
+  thick: FABRIC.thickness / FAB0.thickness,
   /** how hard a point where the cloth has folded over itself is pulled back toward a smooth sheet, a pass */
   unfold: 0.7 };
+
+/** wear another fabric (`fabric=old`: the lighter, stiffer cloth the dials were first set by eye for), before the cloth starts */
+export function useFabric(f: typeof FABRIC) {
+  Object.assign(FABRIC, f);
+  CLOTH.bend = 0.5 * (FABRIC.bendingLength / FAB0.bendingLength) ** 3; CLOTH.drag = 0.04 * FAB0.gsm / FABRIC.gsm; CLOTH.thick = FABRIC.thickness / FAB0.thickness;
+}
+export const OLD_FABRIC = { ...FAB0 };
 
 /** the ease: how far each point may stand off its place on the skin (m), along each kind of piece by row fraction */
 function ease(p: ClothPiece, row: number): number {
@@ -262,8 +284,8 @@ export class GpuCloth {
         // millimetres in from where it was settled, and where it stands off the body it has room to fall toward it. The
         // normal it's held off by is the body's. What's fastened or pinned stays as it is)
         const vi = p.base + r * p.J + c, gap = athlete.bodyGap, e0 = pinned ? 0 : ease(p, r / (p.R - 1));
-        const onBody = !!gap && e0 > 0.002 && gap[vi * 4 + 3] > 0.003, d = onBody ? gap![vi * 4 + 3] : 0;
-        const slack = onBody ? e0 + Math.min(0.03, 0.6 * (d - 0.003)) : e0, inset = onBody ? d - 0.003 : 0.002;
+        const onBody = !!gap && e0 > 0.002 && gap[vi * 4 + 3] > 2 * FABRIC.thickness + 0.001, d = onBody ? gap![vi * 4 + 3] : 0;
+        const lie = 2 * FABRIC.thickness + 0.001, slack = onBody ? e0 + Math.min(0.03, 0.6 * (d - lie)) : e0, inset = onBody ? d - lie : 0.002;
         bind.set([V[v], V[v + 1], V[v + 2], slack], t);
         if (onBody) bindN.set([gap![vi * 4], gap![vi * 4 + 1], gap![vi * 4 + 2], thickness(p)], t);
         else bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);

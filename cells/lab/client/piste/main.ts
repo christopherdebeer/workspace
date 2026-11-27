@@ -11,6 +11,7 @@
  * seconds first), still, readout, mask=0, seed, preview.
  */
 import { mergeDrafts } from './look/athlete';
+import { useFabric, OLD_FABRIC } from './look/cloth';
 import { Bout, type BoutEvent } from './bout';
 import { WEAPONS, EPEE } from './weapons';
 import { Opponent, Dummy, SPARRING, LEVELS } from './ai';
@@ -109,6 +110,8 @@ const you: Controller = {
   },
 };
 if (lesson) thumbs.allow = { ...lesson.controls };
+// (`fabric=old`: the kit in the lighter, stiffer cloth the dials were first set for, to compare)
+if (qs.get('fabric') === 'old') useFabric(OLD_FABRIC);
 const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
 // (the fencers wear the jacket drafted and settled by devtools/piste-jacket.mjs; `jacket=loft`: the lofted one it replaced)
 // (dressed before anything runs, so a still's cloth has the same history in either jacket)
