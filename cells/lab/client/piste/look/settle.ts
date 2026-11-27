@@ -13,7 +13,7 @@ import { type V } from '../v3';
 
 export interface Settled { x: Float64Array; edges: { a: number; b: number; rest: number; dir: 'across' | 'along' | 'diag' | 'bend'; piece: number }[] }
 
-export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number; gravity?: number; free?: boolean } = {}): Settled {
+export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number; gravity?: number; free?: boolean; body?: { at: (p: V) => { d: number; n: V } }; trunkBody?: { at: (p: V) => { d: number; n: V } } } = {}): Settled {
   const n = G.n, x = new Float64Array(n * 3), prev = new Float64Array(n * 3);
   G.at.forEach((p, i) => { x.set(p, i * 3); prev.set(p, i * 3); });
   const edges: Settled['edges'] = [];
@@ -94,6 +94,14 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
         }
       }
       if (!o.free) for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
+      // the body (look/body.ts): out of it, a little off it, the friction as below (the jacket's body out of the trunk
+      // and thighs: an arm by the side is in its sleeve, outside the body of the jacket)
+      if (o.body) { for (let i = 0; i < n; i++) {
+        const j = i * 3, q = (isSleeve[i] || !o.trunkBody ? o.body : o.trunkBody).at([x[j], x[j + 1], x[j + 2]]);
+        if (q.d >= thick) continue;
+        const m = thick - q.d; x[j] += q.n[0] * m; x[j + 1] += q.n[1] * m; x[j + 2] += q.n[2] * m;
+        prev[j] = prev[j] + (x[j] - prev[j]) * 0.3; prev[j + 1] = prev[j + 1] + (x[j + 1] - prev[j + 1]) * 0.3; prev[j + 2] = prev[j + 2] + (x[j + 2] - prev[j + 2]) * 0.3;
+      } continue; }
       // the body: out of every capsule, a little off it
       for (let i = 0; i < n; i++) {
         const p = P(i);

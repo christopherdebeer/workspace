@@ -8,6 +8,7 @@
  * - Sewn in the air (no body, no gravity): every seam closes to nothing; the cloth keeps its paper lengths; and across
  *   each seam the two pieces face the same way (a piece sewn in twisted, or inside out, faces the other way at the seam).
  */
+import type { V } from '../v3';
 import type { Garment } from './draft';
 import { settle } from './settle';
 import type { Capsule } from '../fencer';
@@ -145,8 +146,8 @@ export function airChecks(G: Garment): { checks: Check[]; x: Float64Array } {
  * the air left the cloth stretched, a form filling it tells shaping (a sleeve head cut to cup a shoulder: filled, it eases)
  * from a fault in the making (still stretched).
  */
-export function formChecks(G: Garment, form: Capsule[], regions: { name: string; at: (piece: string, r: number, c: number) => boolean }[]): Check[] {
-  const S = settle(G, form, { seconds: Number(process.env.FORM_S ?? 10), gravity: 0, free: true, sleeveCaps: form, passes: Number(process.env.FORM_P ?? 20) });
+export function formChecks(G: Garment, form: Capsule[], regions: { name: string; at: (piece: string, r: number, c: number) => boolean }[], body?: { at: (p: V) => { d: number; n: V } }): Check[] {
+  const S = settle(G, form, { seconds: Number(process.env.FORM_S ?? 10), gravity: 0, free: true, sleeveCaps: form, passes: Number(process.env.FORM_P ?? 20), body });
   const out: Check[] = [];
   const stretch = (e: (typeof S.edges)[number]) => judged(Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])), e.rest);
   const edges = S.edges.filter((e) => e.dir === 'across' || e.dir === 'along');

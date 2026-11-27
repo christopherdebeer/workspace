@@ -7,7 +7,7 @@
 import { build } from 'esbuild';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 const lab = new URL('../client/piste/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './look/draft'; export * from './look/settle'; export * from './fencer'; export * from './weapons';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' });
+const out = await build({ stdin: { contents: `export * from './look/draft'; export * from './look/settle'; export * from './look/body'; export * from './fencer'; export * from './weapons';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const ROUNDS = Number(process.argv[2] ?? 4);
 
@@ -19,6 +19,17 @@ const B = {
   bodyCaps: [c[0], c[1], c[3], c[15], c[16], c[9], c[11]], sleeveCaps: c.filter((_, i) => i !== 2 && i !== 6), pelvis: c[0].a, f: F.f, r: F.r, up: [0, 1, 0],
   shoulder: f.shoulder, rearShoulder: c[7].a, armW: [f.shoulder, f.elbow, f.hand.map((v, k) => v + (f.elbow[k] - f.hand[k]) * 0.3)], armR: [c[7].a, c[7].b, c[8].b],
 };
+// (fitted on the undressed body (look/body.ts), its distance sampled once over a box round it; CAPSULES=1: on the
+// capsules, as before)
+let field = null, fieldTrunk = null;
+if (!process.env.CAPSULES) {
+  const t0 = Date.now(), bare = M.bareBody(f), lo = [F.o[0] - 0.6, 0.4, -0.6], hi = [F.o[0] + 0.6, 1.75, 0.6];
+  const trunkOnly = { parts: bare.parts.filter((p) => p.name === 'trunk' || p.name.startsWith('thigh')) };
+  // (the box only as big as the jacket can reach: hips to above the shoulders, out past the hands)
+  field = M.bodyField(bare, lo, hi, 0.012); fieldTrunk = M.bodyField(trunkOnly, [F.o[0] - 0.4, 0.45, -0.4], [F.o[0] + 0.4, 1.7, 0.4], 0.012);
+  B.dist = (p) => fieldTrunk.at(p).d; B.distAll = (p) => field.at(p).d;
+  console.log(`the body's distance field: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+}
 const P = M.draftJacket(B);
 if (process.env.OVERSIZE) { const k = Number(process.env.OVERSIZE); for (const qq of M.QUARTERS) P.widths[qq] = P.widths[qq].map((w) => w * k); for (const sd of ['W', 'R']) { P.sleeves[sd].round = P.sleeves[sd].round.map((x) => x * k); P.sleeves[sd].length *= 1.05; } for (const qq of M.QUARTERS) P.lengths[qq] += 0.08; P.shoulderW *= 1.1; }
 console.log('measured girths (cm), hem to shoulder:', P.stations.map((h) => (M.slice(B, B.pelvis[1] - 0.1 + h).girth * 100).toFixed(0)).join(' '));
@@ -42,11 +53,11 @@ for (let round = 1; round <= ROUNDS; round++) {
   const t0 = Date.now();
   G = M.meshJacket(P, B);
   // (long enough to finish: shorter, the solver's unfinished business reads as tightness)
-  S = M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16 });
+  S = M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined });
   const X = (i) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
   const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
   const isSl = (i) => G.pieces.some((pc) => pc.kind === 'sleeve' && i >= pc.base && i < pc.base + pc.rows * pc.cols);
-  const off = Array.from({ length: G.n }, (_, i) => M.clearance(X(i), isSl(i) ? B.sleeveCaps : B.bodyCaps));
+  const off = Array.from({ length: G.n }, (_, i) => field ? (isSl(i) ? field : fieldTrunk).at(X(i)).d : M.clearance(X(i), isSl(i) ? B.sleeveCaps : B.bodyCaps));
   const gaps = G.stitches.map((s) => Math.hypot(...[0, 1, 2].map((k) => S.x[s.p * 3 + k] - (S.x[s.q * 3 + k] * (1 - s.t) + S.x[s.q2 * 3 + k] * s.t))));
   // (the score: stretch, seams, and a hem riding up (a jacket that rides up doesn't fit), each in comparable terms)
   const hemRise = G.pieces.filter((pc) => pc.kind === 'body').map((pc) => Array.from({ length: pc.cols }, (_, cc) => S.x[(pc.base + cc) * 3 + 1] - G.at[pc.base + cc][1]).reduce((a2, b2) => a2 + b2) / pc.cols);
@@ -88,7 +99,7 @@ for (let round = 1; round <= ROUNDS; round++) {
         else if (e50 > hi && across < 0.005) propose((e50 - hi) * 0.3, `${qn} width`, `${qn} width ${bb}`, () => { const d = Math.min(0.02, (e50 - (lo + hi) / 2) * (Math.PI / 2)) * damp; W[bb] -= d; return `${qn} taken in ${cm(d)} cm at ${at2} (ease ${cm(e50)} cm)`; });
       } else {
         const Sv = P.sleeves[pc.side];
-        if (b === 0) continue;   // (the cap's round is the armhole's)
+        if (b === 0) continue;   // (the cap's round is the armhole's: a tight one is a small armhole)
         const sd = pc.side, bb = b, at2 = `${(frac * 100).toFixed(0)}%`;
         if (across > 0.02) propose(across, `sleeve ${sd} round`, `sleeve ${sd} round ${bb}`, () => { const k = Math.min(0.12, across * 0.9) * damp; Sv.round[bb] *= 1 + k; return `sleeve ${sd} let out ${cm(Sv.round[bb] * k / (1 + k))} cm round at ${at2} (tight ${pct(across)})`; });
         else if (e50 > hi && across < 0.005) propose((e50 - hi) * 0.3, `sleeve ${sd} round`, `sleeve ${sd} round ${bb}`, () => { const d = Math.min(0.03, (e50 - (lo + hi) / 2) * Math.PI * 2) * damp; Sv.round[bb] -= d; return `sleeve ${sd} taken in ${cm(d)} cm round at ${at2} (ease ${cm(e50)} cm)`; });

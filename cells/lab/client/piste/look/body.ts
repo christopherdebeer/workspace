@@ -149,10 +149,15 @@ export function bareBody(f: Fencer): Body {
  * how far outside it the point is (negative: inside). For the cloth: a point closer than its thickness is pushed out
  * to the surface plus the thickness.
  */
+const BALLS = new WeakMap<Part, { c: V; r: number }>();
 export function nearSurface(body: Body, p: V): { d: number; surface: V; normal: V } {
   let best = { d: Infinity, surface: p, normal: [0, 1, 0] as V };
   for (const part of body.parts) {
     const S = part.sections;
+    // (a part whose bounding ball is further than the nearest found so far can't be nearer)
+    let ball = BALLS.get(part);
+    if (!ball) { const c = scale(S.reduce((a2, s2) => add(a2, s2.c), [0, 0, 0] as V), 1 / S.length); let r = 0; for (const s2 of S) r = Math.max(r, len(sub(s2.c, c)) + Math.max(s2.R(0), s2.R(Math.PI / 2), s2.R(Math.PI), s2.R(-Math.PI / 2)) * 1.2); ball = { c, r }; BALLS.set(part, ball); }
+    if (len(sub(p, ball.c)) - ball.r > best.d) continue;
     for (let k = 0; k < S.length - 1; k++) {
       const a = S[k], b = S[k + 1], ab = sub(b.c, a.c), L2 = dot(ab, ab);
       const t0 = L2 > 1e-12 ? dot(sub(p, a.c), ab) / L2 : 0;
@@ -171,4 +176,29 @@ export function nearSurface(body: Body, p: V): { d: number; surface: V; normal: 
     }
   }
   return best;
+}
+
+/**
+ * The body's distance field, sampled on a grid over a box (for a body that keeps still: a garment let settle on it).
+ * `at(p)` gives how far outside the body a point is (negative: inside) and the way out, interpolated from the grid's
+ * corners about it; outside the box, nothing (Infinity).
+ */
+export function bodyField(body: Body, lo: V, hi: V, cell = 0.01): { at: (p: V) => { d: number; n: V } } {
+  const nx = Math.ceil((hi[0] - lo[0]) / cell) + 1, ny = Math.ceil((hi[1] - lo[1]) / cell) + 1, nz = Math.ceil((hi[2] - lo[2]) / cell) + 1;
+  const g = new Float32Array(nx * ny * nz);
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
+    g[(k * ny + j) * nx + i] = Math.min(0.2, nearSurface(body, [lo[0] + i * cell, lo[1] + j * cell, lo[2] + k * cell]).d);
+  const G = (i: number, j: number, k: number) => g[(Math.min(nz - 1, Math.max(0, k)) * ny + Math.min(ny - 1, Math.max(0, j))) * nx + Math.min(nx - 1, Math.max(0, i))];
+  const sample = (x: number, y: number, z: number) => {
+    const fx = (x - lo[0]) / cell, fy = (y - lo[1]) / cell, fz = (z - lo[2]) / cell, i = Math.floor(fx), j = Math.floor(fy), k = Math.floor(fz), u = fx - i, v = fy - j, w = fz - k;
+    const l = (a: number, b: number, t: number) => a + (b - a) * t;
+    return l(l(l(G(i, j, k), G(i + 1, j, k), u), l(G(i, j + 1, k), G(i + 1, j + 1, k), u), v), l(l(G(i, j, k + 1), G(i + 1, j, k + 1), u), l(G(i, j + 1, k + 1), G(i + 1, j + 1, k + 1), u), v), w);
+  };
+  return { at: (p) => {
+    if (p[0] < lo[0] || p[1] < lo[1] || p[2] < lo[2] || p[0] > hi[0] || p[1] > hi[1] || p[2] > hi[2]) return { d: Infinity, n: [0, 1, 0] };
+    const d = sample(p[0], p[1], p[2]), e = cell * 0.5;
+    const n: V = [sample(p[0] + e, p[1], p[2]) - sample(p[0] - e, p[1], p[2]), sample(p[0], p[1] + e, p[2]) - sample(p[0], p[1] - e, p[2]), sample(p[0], p[1], p[2] + e) - sample(p[0], p[1], p[2] - e)];
+    const l = Math.hypot(n[0], n[1], n[2]);
+    return { d, n: l > 1e-9 ? [n[0] / l, n[1] / l, n[2] / l] : [0, 1, 0] };
+  } };
 }

@@ -48,7 +48,10 @@ export interface JacketPattern {
 /** the body as the draft sees it: in the fencer's frame (forward f, up, right r; the chest faces −r) */
 export interface Body { caps: Capsule[]; trunk: Capsule[];
   /** what the jacket's body goes round (the trunk and the tops of the thighs), and what its sleeves do (the arms too) */
-  bodyCaps: Capsule[]; sleeveCaps: Capsule[]; pelvis: V; f: V; r: V; up: V; shoulder: V; rearShoulder: V; armW: V[]; armR: V[] }
+  bodyCaps: Capsule[]; sleeveCaps: Capsule[]; pelvis: V; f: V; r: V; up: V; shoulder: V; rearShoulder: V; armW: V[]; armR: V[];
+  /** the undressed body (look/body.ts), if it's given: how far outside its trunk and thighs a point is (what the jacket's
+   * body is measured round, in place of `bodyCaps`), and outside any of it (in place of `sleeveCaps`) */
+  dist?: (p: V) => number; distAll?: (p: V) => number }
 
 const segDist = (p: V, a: V, b: V): [number, number] => {
   const ab = sub(b, a), t = Math.max(0, Math.min(1, dot(sub(p, a), ab) / Math.max(1e-12, dot(ab, ab))));
@@ -67,9 +70,10 @@ export function slice(B: Body, y: number) {
   const radius = (dir: V) => {
     let lo = 0, hi = 0.5;
     // (outward from the centre to where the ray last leaves the body: round the thighs too, at the hem)
-    for (let m = 0.5; m > 0; m -= 0.005) if (clearance(madd(c, dir, m), B.bodyCaps) < 0) { lo = m; hi = m + 0.005; break; }
+    const out = (q: V) => B.dist ? B.dist(q) : clearance(q, B.bodyCaps);
+    for (let m = 0.5; m > 0; m -= 0.005) if (out(madd(c, dir, m)) < 0) { lo = m; hi = m + 0.005; break; }
     if (hi === 0.5) return 0.05;
-    for (let k = 0; k < 16; k++) { const m = (lo + hi) / 2; if (clearance(madd(c, dir, m), B.bodyCaps) < 0) lo = m; else hi = m; }
+    for (let k = 0; k < 16; k++) { const m = (lo + hi) / 2; if (out(madd(c, dir, m)) < 0) lo = m; else hi = m; }
     return lo;
   };
   const dirAt = (a: number): V => add(scale(B.r, -Math.cos(a)), scale(B.f, Math.sin(a)));
@@ -86,7 +90,7 @@ export function draftJacket(B: Body): JacketPattern {
   const q = stations.map((h) => (slice(B, hem + h).girth + ease(h)) / 4);
   const armLen = (pts: V[]) => len(sub(pts[1], pts[0])) + len(sub(pts[2], pts[1]));
   const sleeve = (pts: V[]) => ({ stations: [0, 0.25, 0.5, 0.75, 1], round: [0.42, 0.38, 0.34, 0.31, 0.27], length: armLen(pts) + 0.02 });
-  return {
+  const P: JacketPattern = {
     length, stations, widths: { FW: [...q], FR: [...q], BW: [...q], BR: [...q] },
     // (over the shoulder: the trunk's depth there, front and behind, is climbed to the seam on top)
     lengths: (() => { const S = slice(B, B.shoulder[1] - 0.05), fr = S.radius(scale(B.r, -1)), bk = S.radius(B.r); return { FW: length + fr, FR: length + fr, BW: length + bk, BR: length + bk }; })(),
@@ -97,6 +101,14 @@ export function draftJacket(B: Body): JacketPattern {
     // middle half a centimetre short of the arm: the bend takes up the 2 cm a straight sleeve is given to move in)
     sleeves: { W: { ...sleeve(B.armW), length: armLen(B.armW) - 0.005, bend: 0.16 }, R: sleeve(B.armR) }, capEase: 0.04, moves: ['drafted from the body'],
   };
+  // (the armhole as deep as gives it its length round: a jacket's is about half the chest and 2 cm, for a sleeve set in
+  // round a shoulder and an arm that has to reach (the chest measured round, a little below the armpits))
+  const chest = Math.max(...[0.3, 0.34, 0.38].map((h) => slice(B, B.pelvis[1] + h).girth)), want = chest / 2 + 0.02;
+  let lo = P.armhole - 0.15, hi = P.armhole;
+  for (let k = 0; k < 14; k++) { P.armhole = (lo + hi) / 2; const g = meshJacket(P, B), got = (g.armholes.W + g.armholes.R) / 2; if (got < want) hi = P.armhole; else lo = P.armhole; }
+  P.armhole = (lo + hi) / 2;
+  P.moves.push(`armhole ${(want * 100).toFixed(0)} cm round (chest ${(chest * 100).toFixed(0)} cm)`);
+  return P;
 }
 
 const interp = (xs: number[], ys: number[], x: number) => {
@@ -114,7 +126,7 @@ export interface Pin { p: number; at: V }
 /** a point kept no further than a length from a place (the crotch strap: the hem in front and behind, held to where the
  * strap passes under the crotch) */
 export interface Tie { p: number; at: V; len: number }
-export interface Garment { pieces: Piece[]; stitches: Stitch[]; pins: Pin[]; ties: Tie[]; n: number; flat: [number, number][]; at: V[] }
+export interface Garment { pieces: Piece[]; stitches: Stitch[]; pins: Pin[]; ties: Tie[]; n: number; flat: [number, number][]; at: V[]; /** each armhole's length round, on the paper */ armholes: Record<'W' | 'R', number> }
 
 const ROWS = 32, COLS = 12, SROWS = 30, SCOLS = 18;
 /** the body's grid row the underarm always falls on: the rows below and above it are spaced to the pattern's heights, so
@@ -126,6 +138,7 @@ export const rowAt = (P: JacketPattern, h: number) => (h <= P.armhole ? (h / P.a
 /** the jacket's pieces meshed from the pattern, laid round the body, and what's sewn to what */
 export function meshJacket(P: JacketPattern, B: Body): Garment {
   const hem = B.pelvis[1] - 0.1, pieces: Piece[] = [], stitches: Stitch[] = [], pins: Pin[] = [];
+  const armholes = { W: 0, R: 0 };
   let n = 0;
   const flatAll: [number, number][] = [], atAll: V[] = [];
   // ── the body's quarters ──
@@ -147,7 +160,11 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
         const y = v - P.drop * (c / (COLS - 1)) * sArm * sArm;
         // (the climb over the shoulder is deep at the neck, where the chest is, and shallow at the shoulder point: the extra
         // length tapers across the panel, so it doesn't make the armhole deeper)
-        const climb = 1 - 0.8 * (c / (COLS - 1)), vCol = v + (vPaper - v) * climb;
+        // (both sides of a shoulder seam slope alike, so its two edges are the same length: the one that climbs further keeps
+        // more of its climb out to the point)
+        const Lf = P.lengths?.[`F${qn[1]}` as Quarter] ?? P.length, Lb = P.lengths?.[`B${qn[1]}` as Quarter] ?? P.length;
+        const slope = 0.8 * Math.min(Lf - P.length, Lb - P.length) / Math.max(1e-6, Lq - P.length);
+        const climb = 1 - Math.min(0.8, slope) * (c / (COLS - 1)), vCol = v + (vPaper - v) * climb;
         piece.flat.push([x, vCol - P.drop * (c / (COLS - 1)) * sArm * sArm]);
         // (laid round the body: its angle from the centre in proportion to the quarter's width there)
         // (laid at its height on the paper, up to the top of the body; what's beyond that climbs over the shoulder)
@@ -186,7 +203,7 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     // the two are sewn together there)
     const sheet = (i: number) => (i >= Bk.base && i < Bk.base + ROWS * COLS ? 1 : 0);
     const L: number[] = [0]; for (let k = 1; k < loop.length; k++) { const a = flatAll[loop[k - 1]], b = flatAll[loop[k]]; L.push(L[k - 1] + (sheet(loop[k - 1]) === sheet(loop[k]) ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0)); }
-    const armholeLen = L[L.length - 1];
+    const armholeLen = L[L.length - 1]; armholes[s] = armholeLen;
     // the cap: as wide as the sleeve's round just below it; its height solved (bisection) so the curve across its top
     // is the armhole's length and the cap's ease, the crown opposite the underarm seam (Fab's sleeve head)
     const round = S.round.map((x, k) => (k === 0 ? S.round[1] * 1.02 : x));
@@ -274,5 +291,5 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     const under: V = [B.pelvis[0], hem - 0.05, B.pelvis[2]];
     for (const qn of QUARTERS) for (let cc = 0; cc < 3; cc++) { const p = P4[qn].base + cc; ties.push({ p, at: under, len: len(sub(atAll[p], under)) + 0.01 * cc }); }
   }
-  return { pieces, stitches, pins, ties, n, flat: flatAll, at: atAll };
+  return { pieces, stitches, pins, ties, n, flat: flatAll, at: atAll, armholes };
 }
