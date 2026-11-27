@@ -49,6 +49,9 @@ const assist = preview ? 0 : qs.has('assist') ? clamp(Number(qs.get('assist')) |
  * roll your wrist a little, both settle (and again). Can you feel how much distance closed, and see what your hand did?
  */
 const study = qs.has('study'), clothStudy = qs.get('study') === 'cloth', retreatStudy = qs.get('study') === 'retreat';
+/** (`study=near`: framed as the look's targets are (devtools/refs/piste): the opponent near, in guard, then reaching
+ * toward you slowly and back, so the kit's seen large: its folds, its fullness, its weight) */
+const nearStudy = qs.get('study') === 'near';
 /** look flags: the figures as plain grey models; the contact capsules over them */
 const clay = qs.has('clay'), bodies = qs.has('bodies');
 const replays = !preview && !study && mode !== 'menu' && pick('replay') !== '0' && pick('replay') !== 'off';
@@ -71,7 +74,7 @@ const studyYou: Controller = { intent: () => {
   const t = studyClock(), u = Math.min(1, Math.max(0, (t - STUDY.roll[0]) / (STUDY.roll[1] - STUDY.roll[0]))), e = u * u * (3 - 2 * u);
   return { ...idle(), extend: 0.12, roll: STUDY.rollTo * e };
 } };
-let studyLap = 0, studyStepped = -1;
+let studyLap = -1, studyStepped = -1;
 const studyThem: Controller = { intent: () => {
   const lap = Math.floor(bout.t / STUDY.loop), t = studyClock();
   if (clothStudy) {
@@ -79,8 +82,9 @@ const studyThem: Controller = { intent: () => {
     const phase = clamp(Math.min(t - 0.75, (4.5 - t) / 1.5), 0, 1);
     return { ...idle(), extend: 0.05 + 0.94 * phase * phase * (3 - 2 * phase) };
   }
-  // (each lap from the en garde lines again)
-  if (lap !== studyLap) { studyLap = lap; bout.place(3.32); }
+  // (each lap from the en garde lines again; the near study from close, reaching slowly and back)
+  if (lap !== studyLap) { studyLap = lap; bout.place(nearStudy ? 2.15 : 3.32); }
+  if (nearStudy) { const phase = clamp(Math.min(t - 1.0, (5.0 - t) / 1.2), 0, 1); return { ...idle(), extend: 0.1 + 0.85 * phase * phase * (3 - 2 * phase) }; }
   const I = { ...idle(), extend: 0.12 };
   // (`study=retreat`: a step back instead, to judge the figure mid-retreat, as it's most often seen)
   if (t >= STUDY.step && studyStepped !== lap) { studyStepped = lap; I.step = retreatStudy ? 'retreat' : 'advance'; }

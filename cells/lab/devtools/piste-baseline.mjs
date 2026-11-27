@@ -7,7 +7,7 @@ import { readdirSync } from 'node:fs';
 const { withWood } = await import('./harness.mjs');
 const refs = new URL('./refs/piste/', import.meta.url).pathname;
 const targets = readdirSync(refs).filter((f) => /^target-\d+\.jpg$/.test(f)).sort().map((f) => refs + f);
-const queries = process.argv.slice(2).length ? process.argv.slice(2) : ['study&t=0.8&still', 'study&t=1.9&still', 'preview&seed=2&t=2&still', 'study&t=0.8&still&body=bare'];
+const queries = process.argv.slice(2).length ? process.argv.slice(2) : ['study=near&t=0.8&still', 'study=near&t=2.6&still', 'study=near&t=2.6&still&body=bare', 'study&t=0.8&still'];
 await withWood(async (lab) => {
   const shots = [];
   for (const q of queries) {
