@@ -32,3 +32,9 @@ Framed alike (the opponent about 2 m off, in guard, then reaching toward you), w
    gauntlet, and stands a little off the body all over. The collar's hidden by the bib in both.
 7. **Your own arm**: theirs a sleeve of cloth reaching into the corner, the bell large. Ours similar; the glove reads
    more than the sleeve.
+
+### The guard (2026-11-27)
+
+The back foot's set out to the side now (15 cm off the front's line, from 6), as theirs is. The depth isn't matched yet:
+lowered from 0.82 m to 0.80, the hips put the septime lesson on a knife edge (its riposte lands two times in three at most
+heights, and moving the lesson's distance either way fails differently), so the deeper knee waits on understanding why.
