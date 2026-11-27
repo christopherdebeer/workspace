@@ -1,4 +1,5 @@
 // Spatial advertising plates: alpha-cut graphic surfaces in a real off-axis stereo scene.
+import {pictorial} from './pictorial';
 type Part='headline'|'product'|'copy'|'ornament'|'coupon'|'background';
 const names:Part[]=['headline','product','copy','ornament','coupon','background'];
 type Surface={part:Part,z:number,x:number,y:number,w:number,h:number,texture:WebGLTexture,tilt:number};
@@ -32,6 +33,8 @@ export function spatialPlates(canvas:HTMLCanvasElement,initial:number){
  function mount(n:number){
  plate=n;for(const s of surfaces)g.deleteTexture(s.texture);surfaces=[];
  const second=n===1;
+ if(n>=2){pictorial(surface,n);document.querySelector('#title')!.textContent=n===2?'Apparition':'Flight';document.querySelector('#number')!.textContent='PLATE '+(n===2?'VI':'VII')+' / VII';document.querySelectorAll('.strip button').forEach((e,i)=>e.setAttribute('aria-pressed',String(i===n+3)));draw();return}
+
  surface('background',0,0,-.8,2.7,2.05,(c,W,H)=>{c.strokeStyle='#111';c.lineWidth=2;for(let i=0;i<4;i++)c.strokeRect(30+i*12,30+i*12,W-60-i*24,H-60-i*24);for(let i=0;i<28;i++){const x=40+i*(W-80)/27;c.beginPath();c.moveTo(x,H-45);c.lineTo(W*.5,H*.58);c.stroke()}for(let i=0;i<9;i++){const y=H-45-i*i*3;c.beginPath();c.moveTo(40,y);c.lineTo(W-40,y);c.stroke()}text(c,'OPTICAL AMUSEMENTS  /  SPECIMEN '+(second?'V':'IV'),55,55,W-110,30,'bold monospace')});
  surface('headline',0,.64,.48,2.04,.48,(c,W,H)=>{text(c,second?'THE THIRD':'PENNY VISION',8,0,W-16,H*.74,'900 sans-serif');text(c,second?'DIMENSION.':'VIRTUAL REALITY FOR SMALL CHANGE.',8,H*.72,W-16,H*.25,'italic bold serif')},-.06);
  surface('product',0,.02,.25,1.65,.63,(c,W,H)=>{const X=W/100,Y=H/40;c.scale(X,Y);c.fillStyle='#111';c.beginPath();c.moveTo(2,9);c.lineTo(15,3);c.lineTo(88,3);c.lineTo(98,10);c.lineTo(93,32);c.lineTo(61,32);c.lineTo(50,24);c.lineTo(39,32);c.lineTo(8,32);c.closePath();c.fill();c.fillStyle='#fff';c.beginPath();c.moveTo(8,10);c.lineTo(44,10);c.lineTo(42,25);c.lineTo(12,25);c.closePath();c.fill();c.beginPath();c.moveTo(56,10);c.lineTo(92,10);c.lineTo(88,25);c.lineTo(58,25);c.closePath();c.fill();c.strokeStyle='#111';c.lineWidth=.35;for(let i=0;i<20;i++){c.beginPath();c.moveTo(12+i*1.4,25);c.lineTo(23+i*1.4,10);c.stroke();c.beginPath();c.moveTo(58+i*1.4,25);c.lineTo(69+i*1.4,10);c.stroke()}},.42);
@@ -40,7 +43,7 @@ export function spatialPlates(canvas:HTMLCanvasElement,initial:number){
  surface('ornament',second?-.9:.92,.30,-.15,.47,.47,(c,W,H)=>{c.translate(W/2,H/2);c.strokeStyle='#111';c.lineWidth=6;for(let i=0;i<20;i++){const a=i*Math.PI/10;c.beginPath();c.moveTo(Math.cos(a)*W*.28,Math.sin(a)*H*.28);c.lineTo(Math.cos(a)*W*.48,Math.sin(a)*H*.48);c.stroke()}c.beginPath();c.arc(0,0,W*.25,0,Math.PI*2);c.stroke();text(c,'3-D',-W*.2,-H*.1,W*.4,H*.2,'900 serif')});
  surface('copy',-.43,-.48,.10,1.12,.35,(c,W,H)=>{text(c,'TWO LENSES.',0,0,W,H*.36);text(c,'NO ELECTRONICS.',0,H*.39,W,H*.28);text(c,'THE FUTURE IS MADE OF CARDBOARD.',0,H*.78,W,H*.19,'bold monospace')});
  surface('coupon',.78,-.51,-.32,.73,.40,(c,W,H)=>{c.strokeStyle='#111';c.lineWidth=8;c.setLineDash([20,14]);c.strokeRect(8,8,W-16,H-16);c.setLineDash([]);text(c,'MAIL ORDER',35,30,W-70,H*.22);text(c,'SEE WHAT YOU',35,H*.33,W-70,H*.19,'bold serif');text(c,'ARE MISSING.',35,H*.54,W-70,H*.19,'bold serif');c.beginPath();c.moveTo(35,H*.81);c.lineTo(W-35,H*.81);c.stroke()});
- document.querySelector('#title')!.textContent=second?'The Third Dimension':'Optical Classifieds';document.querySelector('#number')!.textContent='PLATE '+(second?'V':'IV')+' / V';
+ document.querySelector('#title')!.textContent=second?'The Third Dimension':'Optical Classifieds';document.querySelector('#number')!.textContent='PLATE '+(second?'V':'IV')+' / VII';
  document.querySelectorAll('.strip button').forEach((e,i)=>e.setAttribute('aria-pressed',String(i===n+3)));
  draw();
  }
@@ -59,7 +62,7 @@ export function spatialPlates(canvas:HTMLCanvasElement,initial:number){
  for(const e of [focus,relief,lens])e.oninput=draw;
  canvas.style.cursor='default';canvas.setAttribute('aria-label','Spatial advertising plate');
  const fig=canvas.parentElement!;fig.style.minHeight='min(65svh,650px)';fig.style.color='#555';const cap=fig.querySelector('.caption:last-child span:last-child');if(cap)cap.textContent='Inspect parts below';
- const coin=document.querySelector<HTMLButtonElement>('.coin')!;coin.onclick=()=>mount(1-plate);
+ const coin=document.querySelector<HTMLButtonElement>('.coin')!;coin.onclick=()=>mount((plate+1)%4);
  const strip=document.querySelector('.strip')!;strip.querySelectorAll<HTMLButtonElement>('button').forEach((e,i)=>e.onclick=()=>{if(i<3)location.href=location.pathname+'?plate='+['trefoil','armillary','volute'][i];else mount(i-3)});
- mount(initial);new ResizeObserver(draw).observe(canvas);
+ if(initial>=2){relief.value=String(Math.min(Number(relief.max),Math.max(Number(relief.value),Number(relief.max)*.72)));} mount(initial);new ResizeObserver(draw).observe(canvas);
 }
