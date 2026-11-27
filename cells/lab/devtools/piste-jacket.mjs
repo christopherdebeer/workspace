@@ -110,6 +110,9 @@ for (let round = 1; round <= ROUNDS; round++) {
       const colOf = (i) => (i - pc.base) % pc.cols, rowOf2 = (i) => Math.floor((i - pc.base) / pc.cols);
       const outer = S.edges.map((e, k) => (e.piece === pi && e.dir === 'along' && Math.abs(colOf(e.a) - (pc.cols - 1) / 2) < pc.cols / 4 && rowOf2(e.a) < pc.rows * 0.75 ? strain[k] : null)).filter((v) => v !== null);
       const along = q(outer, 0.75), Sv = P.sleeves[pc.side];
+      // (pulled along all round, from the elbow to the cuff: the sleeve's too short for the arm it's on; lengthen it)
+      const lower = S.edges.map((e, k) => (e.piece === pi && e.dir === 'along' && rowOf2(e.a) >= pc.rows * 0.5 ? strain[k] : null)).filter((v) => v !== null), pulled = q(lower, 0.5);
+      if (pulled > 0.03) { const sd = pc.side; propose(pulled, `sleeve ${sd} length`, `sleeve ${sd} length`, () => { const add = Math.min(0.03, pulled * Sv.length * 0.25) * damp; Sv.length += add; return `sleeve ${sd} lengthened ${cm(add)} cm to ${cm(Sv.length)} cm (pulled ${pct(pulled)} below the elbow)`; }); }
       if (along > 0.02) { const sd = pc.side; propose(along, `sleeve ${sd} bend`, `sleeve ${sd} bend`, () => { const add = Math.min(0.04, along * Sv.length * 0.6) * damp; Sv.bend = (Sv.bend ?? 0) + add; return `sleeve ${sd} cut more bent: ${cm(Sv.bend)} cm more along its outside (pulled ${pct(along)})`; }); }
     }
     if (pc.kind === 'body' && pc.quarter[1] === 'W' && pc.quarter[0] === 'F') {
