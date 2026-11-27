@@ -14,25 +14,49 @@ console.log(`the body's distance field: ${((Date.now() - t0) / 1000).toFixed(1)}
 const P = M.draftBreeches(f, bare);
 const cm = (x) => (x * 100).toFixed(1), pct = (x) => `${(x * 100).toFixed(1)}%`;
 console.log('measured (cm): ' + Object.entries(P.girth).map(([k, v]) => `${k} ${cm(v)}`).join(', ') + `; inseam ${cm(P.inseam)}, side ${cm(P.side)}`);
-const G = M.meshBreeches(P, f, bare);
-let fails = 0;
-const show = (title, list) => { console.log(`\n${title}`); for (const k of list) { if (!k.ok) fails++; console.log(`${k.ok ? 'ok  ' : 'FAIL'}  ${k.what} — ${k.detail}`); } };
-show('on the paper', M.paperChecks(G, { capEase: 0 }).filter((k) => !/cap/.test(k.what)));
-show('sewn up in the air', M.airChecks(G).checks.filter((k) => /closes|right side out/.test(k.what)));
-const S = M.settle(G, [], { seconds: 8, passes: 16, body: field });
-const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
-const q = (a, t) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(t * s.length))] : NaN; };
-console.log(`\nsettled on the body: stretch p50 ${pct(q(strain, 0.5))} p90 ${pct(q(strain, 0.9))} p99 ${pct(q(strain, 0.99))}`);
-G.pieces.forEach((pc, pi) => {
-  console.log(`  ${pc.name}`);
-  for (const [nm, r0, r1] of [['waist', 0, 2], ['hips', 3, 7], ['crotch', 8, 12], ['thigh', 13, 19], ['knee', 20, 26], ['band', 27, 29]]) {
-    const rowOf = (i) => Math.floor((i - pc.base) / pc.cols), inB = (i) => { const r = rowOf(i); return r >= r0 && r <= r1; };
+const q = (a, t) => { const s2 = [...a].sort((x, y) => x - y); return s2.length ? s2[Math.min(s2.length - 1, Math.floor(t * s2.length))] : NaN; };
+const BANDS = [['waist', 0, 2], ['hips', 3, 7], ['crotch', 8, 12], ['thigh', 13, 19], ['knee', 20, 26], ['band', 27, 29]];
+/** sewn, settled on the body, measured: each panel's bands, across and along (75th percentile) and ease */
+function fit(P) {
+  const G = M.meshBreeches(P, f, bare), S = M.settle(G, [], { seconds: 8, passes: 16, body: field });
+  const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
+  const panels = G.pieces.map((pc, pi) => ({ name: pc.name, bands: Object.fromEntries(BANDS.map(([nm, r0, r1]) => {
+    const inB = (i) => { const r = Math.floor((i - pc.base) / pc.cols); return r >= r0 && r <= r1; };
     const ac = [], al = [], off = [];
     S.edges.forEach((e, k) => { if (e.piece !== pi || !inB(e.a)) return; if (e.dir === 'across') ac.push(strain[k]); if (e.dir === 'along') al.push(strain[k]); });
     for (let i = pc.base; i < pc.base + pc.rows * pc.cols; i++) if (inB(i)) off.push(field.at([S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]]).d);
-    console.log(`    ${nm.padEnd(7)} across ${pct(q(ac, 0.75)).padStart(6)}  along ${pct(q(al, 0.75)).padStart(6)}  ease ${cm(q(off, 0.5)).padStart(5)} cm`);
-  }
-});
+    return [nm, { across: q(ac, 0.75), along: q(al, 0.75), ease: q(off, 0.5) }];
+  })) }));
+  return { G, S, strain, panels, score: q(strain, 0.9) };
+}
+const report = (r) => { console.log(`  stretch p50 ${pct(q(r.strain, 0.5))} p90 ${pct(q(r.strain, 0.9))} p99 ${pct(q(r.strain, 0.99))}`); for (const pn of r.panels) { console.log(`  ${pn.name}`); for (const [nm, b] of Object.entries(pn.bands)) console.log(`    ${nm.padEnd(7)} across ${pct(b.across).padStart(6)}  along ${pct(b.along).padStart(6)}  ease ${cm(b.ease).padStart(5)} cm`); } };
+// the fitting: the worst three alterations of different kinds each round, a round that makes it worse undone
+const ROUNDS = Number(process.argv[2] ?? 5);
+let best = { P: structuredClone(P), r: fit(P) }, damp = 0.7;
+console.log(`\n── as drafted`); report(best.r);
+for (let round = 1; round <= ROUNDS; round++) {
+  const Pn = structuredClone(best.P), r = best.r, worst = (nm, key, panels) => Math.max(...r.panels.filter((pn) => !panels || panels(pn.name)).map((pn) => pn.bands[nm][key]));
+  const props = [];
+  const front = (n) => n.endsWith('front');
+  const w = worst('waist', 'across'); if (w > 0.02) props.push([w, `waist let out ${cm(Math.min(0.04, w * 0.9) * damp)} cm`, () => { Pn.ease.waist += Math.min(0.04, w * 0.9) * damp; }]);
+  const kb = Math.max(worst('knee', 'along', front), worst('band', 'along', front)); if (kb > 0.03) props.push([kb, `fronts more bent over the knee`, () => { Pn.kneeBend += Math.min(0.04, kb * 0.25) * damp; }]);
+  const bl = Math.min(...r.panels.map((pn) => pn.bands.band.along)); if (bl > 0.03) props.push([bl, `inside leg lengthened`, () => { Pn.inseam += Math.min(0.03, bl * Pn.inseam * 0.4) * damp; }]);
+  const ba = worst('band', 'across'); if (ba > 0.03) props.push([ba, `band let out`, () => { Pn.ease.band += Math.min(0.03, ba * 0.4) * damp; }]);
+  const ka = worst('knee', 'across'); if (ka > 0.03) props.push([ka, `let out above the knee`, () => { Pn.ease.knee += Math.min(0.04, ka * 0.4) * damp; }]);
+  const cr = worst('crotch', 'along'); if (cr > 0.03) props.push([cr, `rise lengthened`, () => { Pn.riseBack += Math.min(0.03, cr * 0.2) * damp; Pn.riseFront += Math.min(0.02, cr * 0.12) * damp; }]);
+  props.sort((a, b) => b[0] - a[0]);
+  if (!props.length) { console.log(`\n── round ${round}: nothing to alter`); break; }
+  for (const [, , apply] of props.slice(0, 3)) apply();
+  const rn = fit(Pn), better = rn.score < r.score;
+  console.log(`\n── round ${round}: ${props.slice(0, 3).map((x) => `${x[1]} (${pct(x[0])})`).join('; ')} → p90 ${pct(rn.score)} against ${pct(r.score)}${better ? '' : ': worse, undone, alterations halved'}`);
+  if (better) { Pn.moves.push(...props.slice(0, 3).map((x) => x[1])); best = { P: Pn, r: rn }; } else damp *= 0.5;
+}
+console.log(`\n── fitted`); report(best.r);
+const G = best.r.G, S = best.r.S;
+let fails = 0;
+const show = (title, list) => { console.log(`\n${title}`); for (const k of list) { if (!k.ok) fails++; if (!k.ok) console.log(`FAIL  ${k.what} — ${k.detail}`); } };
+show('on the paper', M.paperChecks(G, { capEase: 0 }).filter((k) => !/cap/.test(k.what)));
+show('sewn up in the air', M.airChecks(G).checks.filter((k) => /closes|right side out/.test(k.what)));
 // written for the game: as the jacket's (devtools/piste-jacket.mjs): points, triangles (each panel's facing out), the
 // paper, what's sewn to what (welded: each sewn point follows the points it's sewn to)
 {
@@ -58,7 +82,8 @@ G.pieces.forEach((pc, pi) => {
       seam.push(r3(Math.min(ed(pc.base + r * pc.cols), ed(pc.base + r * pc.cols + pc.cols - 1))));
     }
   });
-  const kneeRow = (M.CROTCH_ROW + (M.BROWS - 1 - M.CROTCH_ROW) * ((P.inseam - 0.07) / P.inseam)) / (M.BROWS - 1);
+  const kneeRow = (M.CROTCH_ROW + (M.BROWS - 1 - M.CROTCH_ROW) * ((best.P.inseam - 0.07) / best.P.inseam)) / (M.BROWS - 1);
+  writeFileSync(new URL('../client/piste/look/breeches-pattern.json', import.meta.url), JSON.stringify(best.P, null, 1));
   const pieces = G.pieces.map((pc) => ({ name: pc.name, kind: 'breeches', base: pc.base, rows: pc.rows, cols: pc.cols, joint: r3(kneeRow), crotch: r3(M.CROTCH_ROW / (M.BROWS - 1)) }));
   writeFileSync(new URL('../static/piste/breeches-draft.json', import.meta.url), JSON.stringify({ x: Array.from(X, r3), tris, uv, seam, pieces, flat: G.flat.flatMap((p) => [r3(p[0]), r3(p[1])]), seams: G.stitches.map((st) => [st.p, st.q]), stitches }));
 }

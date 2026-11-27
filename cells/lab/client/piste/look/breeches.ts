@@ -161,8 +161,10 @@ export function meshBreeches(P: BreechesPattern, f: Fencer, body: Bare, base = 0
           const R = roundAt(lower, pelvis, yH).radius(dir);
           p = madd([pelvis[0], yH, pelvis[2]], dir, R + (r === 0 ? 0.004 : 0.012));
         } else {
-          const at = u * legLen < len(sub(lg.knee, lg.crotch)) ? madd(lg.crotch, lg.thighDir, u * legLen) : madd(lg.knee, lg.shinDir, u * legLen - len(sub(lg.knee, lg.crotch)));
-          const axis = u * legLen < len(sub(lg.knee, lg.crotch)) ? lg.thighDir : lg.shinDir;
+          // (laid down the leg as far as the body's own knee band, whatever the paper's length: a longer leg hangs slack)
+          const kc = len(sub(lg.knee, lg.crotch)), geo = kc + 0.07, d = u * geo;
+          const at = d < kc ? madd(lg.crotch, lg.thighDir, d) : madd(lg.knee, lg.shinDir, d - kc);
+          const axis = d < kc ? lg.thighDir : lg.shinDir;
           // (its front: the belly's way at the crotch, turning to the knee's way at the knee)
           const fr0 = norm(sub(centreDir, scale(axis, dot(centreDir, axis))));
           const kneeFront = norm(sub(lg.pole, scale(axis, dot(lg.pole, axis)))), frontWay = back ? scale(kneeFront, -1) : kneeFront;

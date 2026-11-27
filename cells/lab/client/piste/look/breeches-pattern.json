@@ -1,0 +1,54 @@
+{
+ "side": 0.165,
+ "riseFront": 0.225,
+ "riseBack": 0.29500000000000004,
+ "inseam": 0.4911469109819666,
+ "girth": {
+  "waist": 0.8451706628848004,
+  "hips": 1.1301471953140105,
+  "thigh": 0.5396791979917811,
+  "knee": 0.35579203987012037,
+  "band": 0.3533395311462493
+ },
+ "ease": {
+  "waist": 0.11399999999999999,
+  "hips": 0.1,
+  "thigh": 0.1,
+  "knee": 0.06,
+  "band": 0.02
+ },
+ "kneeBend": 0.184,
+ "backShare": 0.56,
+ "forkFront": 0.0470894664714171,
+ "forkBack": 0.0941789329428342,
+ "quarters": {
+  "F front": {
+   "waist": 0.18870389357180717,
+   "hips": 0.237041163997661
+  },
+  "F back": {
+   "waist": 0.24437704061445667,
+   "hips": 0.32661280378990815
+  },
+  "B front": {
+   "waist": 0.2383211392108284,
+   "hips": 0.3546334911287978
+  },
+  "B back": {
+   "waist": 0.1742189615756336,
+   "hips": 0.2143534066477275
+  }
+ },
+ "moves": [
+  "drafted from the body",
+  "fronts more bent over the knee",
+  "waist let out 2.8 cm",
+  "inside leg lengthened",
+  "fronts more bent over the knee",
+  "inside leg lengthened",
+  "waist let out 2.8 cm",
+  "fronts more bent over the knee",
+  "inside leg lengthened",
+  "waist let out 2.8 cm"
+ ]
+}
