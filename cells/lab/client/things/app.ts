@@ -1,5 +1,5 @@
 import { cellPost, signInPage } from './auth';
-import {SEEDS,entities,isEntity,isContainer,refs,title,names,accept,type Fact,type Entity} from './world';
+import {SEEDS,entities,isEntity,isContainer,refs,title,names,accept,isInquiry,isReceipt,type Inquiry,type Fact,type Entity} from './world';
 import {Recorder,type Frame} from './trace';
 import {observe} from './observer';
 const $=(id:string)=>document.getElementById(id)!;
@@ -12,6 +12,8 @@ function store(key:string,v:unknown){try{localStorage.setItem(key,JSON.stringify
 let actor=read('things.actor.v1','');if(!actor){actor=uid();if(!preview)store('things.actor.v1',actor)}
 let room=new URLSearchParams(location.hash.slice(1)).get('room')||'';if(!/^[a-f0-9]{32}$/.test(room)||preview)room='';
 let local=preview?[]:read<Fact[]>('things.local.v1',[]),remote:Fact[]=[];
+let focusInquiry=new URLSearchParams(location.hash.slice(1)).get('inquiry')||'';
+let draft:{context:string;selected:string[]}|null=null;
 const facts=()=>room?remote:local;
 const all=()=>entities(facts());
 const get=(k:string)=>all().find(e=>e.id===k);
@@ -24,7 +26,7 @@ type Notebook=Record<string,View>;
 let notebook:Notebook={},stack:string[]=[],selected:string[]=[],linkFrom='',nameTarget='',busy=false,syncing=false,W=640,H=440;
 const ctx=()=>stack[stack.length-1]||'root';
 const notebookKey=()=>['things.view.v1',room||'local',actor].join('.');
-function loadView(){notebook=preview?{}:read<Notebook>(notebookKey(),{});stack=[];selected=[];linkFrom='';nameTarget=''}
+function loadView(){notebook=preview?{}:read<Notebook>(notebookKey(),{});stack=[];selected=[];linkFrom='';nameTarget='';draft=null;$('inquiry').hidden=true;}
 function view():View{const k=ctx();return notebook[k]??(notebook[k]={shown:[],hidden:[],pos:{}})}
 function saveView(){if(!preview)store(notebookKey(),notebook)}
 function defaults(){if(ctx()==='root')return SEEDS.map(x=>x.id);const e=get(ctx());return e?refs(e):[]}
@@ -79,6 +81,7 @@ function render(){
  if(picked.length>=2)tools+=btn('group','Group')+btn('compose','Compose','class="primary"');
  tools+=btn('hide','Hide here','class="quiet"')+btn('clear','Clear','class="quiet"');
  }
+ if(room)tools+=btn('inquire',picked.length?'Inquire…':'Inquire here…','class="quiet"');
  $('toolbar').innerHTML=tools;
  const inspector=$('inspector');
  inspector.hidden=!e;
@@ -95,7 +98,30 @@ function render(){
  $('nearby').hidden=!hidden.length;
  $('nearHint').textContent=hidden.length+' other '+(hidden.length===1?'thing':'things')+' · '+adjacent.length+' connected to this view. Reveal without changing the shared world.';
  $('nearItems').innerHTML=offered.map(x=>btn('reveal',label(x)+' · '+who(x.by),'class="chip"',x.id)).join('');
+ renderExchange();
  draw();
+}
+const objectLabel=(k:string)=>{const e=get(k);return e?label(e):k==='root'?'Field':'Unknown thing'};
+function openInquiry(){if(!room)return;draft={context:ctx(),selected:[...selected]};$('inquiryScope').textContent=(draft.selected.length?draft.selected.map(objectLabel).join(' · '):'No particular selection')+' / '+objectLabel(draft.context);($('inquiryQuestion') as HTMLTextAreaElement).value='';$('inquiryStatus').textContent='';$('inquiry').hidden=false;$('inquiry').scrollIntoView({block:'nearest'});}
+function closeInquiry(){draft=null;$('inquiry').hidden=true}
+function linkFor(k:string){return location.origin+'/things#room='+room+'&inquiry='+k}
+async function copyInquiry(k:string){const url=linkFor(k);try{await navigator.clipboard.writeText(url);status('Inquiry link copied. Paste it into your conversation.')}catch{prompt('Copy inquiry link',url)}}
+function renderExchange(){
+ const qs=facts().filter(isInquiry),rs=facts().filter(isReceipt);
+ $('exchange').hidden=!room||!qs.length;
+ $('exchangeCount').textContent=qs.length+' inquiries · '+rs.length+' responses';
+ const ordered=[...qs].reverse().sort((a,b)=>Number(b.id===focusInquiry)-Number(a.id===focusInquiry));
+ $('exchangeItems').innerHTML=ordered.map(q=>{
+ const replies=rs.filter(r=>r.inquiry===q.id);
+ const objects=[...new Set([...q.selected,...(q.context==='root'?[]:[q.context])])];
+ return '<article class="exchange-card" '+(q.id===focusInquiry?'style="border-color:var(--green)"':'')+'><small>'+esc(q.intent==='attend'?'ATTENTION':'INQUIRY')+' · '+esc(who(q.by))+' · '+(replies.length?replies.length+' response(s)':'awaiting response')+'</small><p>'+esc(q.question||'Attend to this context.')+'</p><p class="hint">'+esc(objectLabel(q.context))+' / '+esc(q.selected.map(objectLabel).join(' · ')||'whole context')+'</p><div class="row">'+objects.map(k=>btn('reveal',objectLabel(k),'class="chip"',k)).join('')+btn('copyInquiry','Copy inquiry link','class="chip"',q.id)+'</div>'+replies.map(r=>'<div class="receipt"><small>RESPONSE · '+esc(who(r.by))+'</small>'+(r.note?'<p>'+esc(r.note)+'</p>':'')+'<div class="row">'+r.objects.map(k=>btn('reveal',objectLabel(k),'class="chip"',k)).join('')+(r.objects.length?btn('receive','Reveal response','class="chip"',r.id):'')+'</div></div>').join('')+'</article>'
+ }).join('');
+}
+async function submitInquiry(intent:'attend'|'inquire'){
+ if(!draft||busy||!room)return;
+ const snapshot=draft,question=intent==='attend'?'':($('inquiryQuestion') as HTMLTextAreaElement).value.trim();
+ $('inquiryStatus').textContent='Sharing…';$('attendSend').toggleAttribute('disabled',true);$('inquireSend').toggleAttribute('disabled',true);
+ try{const f=await add({kind:'inquiry',context:snapshot.context,selected:snapshot.selected,question,intent});if(!f){$('inquiryStatus').textContent='Could not share. See status below.';return}focusInquiry=f.id;closeInquiry();render();await copyInquiry(f.id)}finally{$('attendSend').toggleAttribute('disabled',false);$('inquireSend').toggleAttribute('disabled',false)}
 }
 async function sync(){if(!room||syncing||busy||preview)return false;syncing=true;const r=room;try{const res=await fetch('/things/api/'+r,{cache:'no-store'});if(!res.ok)throw Error('Shared room unavailable');const d=await res.json();if(room!==r)return false;if(JSON.stringify(remote)!==JSON.stringify(d.facts)){remote=d.facts;if(!nameTarget&&!drag)render()}status('Shared room · '+remote.length+' contributions');return true}catch(e){if(room===r)status((e as Error).message,true);return false}finally{syncing=false}}
 async function add(raw:Record<string,unknown>){if(busy||preview)return null;busy=true;const r=room;const f=accept({id:uid(),by:actor,...raw},facts(),Date.now());if(!f){busy=false;status('This contribution is not valid.',true);return null}try{if(r){const res=await cellPost('/things/api/'+r,f,true);const d=await res.json();if(!res.ok)throw Error(d.error||'Unable to save');if(room!==r)return null;remote=d.facts;status('Kept in the shared world')}else{const next=[...local,f];if(!store('things.local.v1',next))throw Error('Local storage unavailable');local=next;status('Kept in this browser')}return f}catch(e){status((e as Error).message,true);return null}finally{busy=false}}
@@ -122,6 +148,9 @@ if(!preview){
  svg.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){const k=(e.target as Element).closest('[data-id]')?.getAttribute('data-id');if(k){e.preventDefault();choose(k)}}});
  document.querySelector('main')!.addEventListener('click',async e=>{const b=(e.target as Element).closest<HTMLButtonElement>('button[data-action]');if(!b||busy)return;const a=b.dataset.action,k=b.dataset.key||'',one=selected.length===1?get(selected[0]):undefined;
  switch(a){
+ case 'inquire':openInquiry();break;
+ case 'copyInquiry':await copyInquiry(k);break;
+ case 'receive':{const r=facts().find(f=>isReceipt(f)&&f.id===k);if(isReceipt(r)){for(const id of r.objects)show(id);saveView();render();status('Response revealed in your view.')}break}
  case 'root':navigate(0);break;case 'crumb':navigate(Number(k)+1);break;case 'out':navigate(stack.length-1);break;
  case 'clear':selected=[];linkFrom='';nameTarget='';render();trace('clear');break;
  case 'link':linkFrom=linkFrom?'':selected[0];render();trace(linkFrom?'link-start':'link-cancel');break;
@@ -144,6 +173,9 @@ if(!preview){
  $('share').onclick=async()=>{if(busy||rec.active||rec.busy){status('Stop recording before switching rooms.',true);return}if(room){room='';remote=[];history.replaceState(null,'',location.pathname+location.search);loadView();info();render();status('Local notebook');return}room=uid();history.replaceState(null,'',location.pathname+location.search+'#room='+room);loadView();info();render();if(await sync())status('Invitation ready. Local things stay local.')};
  $('identity').onclick=()=>{if(busy||rec.active||rec.busy){status('Stop recording before switching inhabitant.',true);return}actor=uid();store('things.actor.v1',actor);loadView();info();render()};
  $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);status('Invitation copied')}catch{status('Copy the address from your browser.')}};
+ $('closeInquiry').onclick=closeInquiry;
+ $('attendSend').onclick=()=>void submitInquiry('attend');
+ $('inquireSend').onclick=()=>void submitInquiry('inquire');
  recordUI();
  $('recordSignIn').onclick=()=>void signInPage().catch(e=>{$('recordStatus').textContent=(e as Error).message});
  $('recordStart').onclick=()=>void rec.start();
