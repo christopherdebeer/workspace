@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:317f10ba4304f3a5d78571acf365518feea09d5e2ca2f8a878935bba8e2ea9f0",
-  "syncedAt": "2026-11-27T22:44:31.850Z",
+  "treeVersion": "tree:c6b13df318f5d71b886831e636245ee29a3f3690e29e4958ebb60a1854f994fa",
+  "syncedAt": "2026-11-27T22:45:36.329Z",
   "files": {
     "README.md": "sha256:0bf552fbd99c966b00484b4d831c42db1b25a8420e2332a20e39db53d4747e0b",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -294,9 +294,9 @@
     "client/piste/look/proof.ts": "sha256:16c85ebad74277b5720c6cfce338ffd87a222ec08994a289cfd997682058a1db",
     "client/piste/look/salle.ts": "sha256:5b6e61752f8755ad8eea6d8bd17ba9bcab1bea05c27cda011e8e6fbcbf306b53",
     "client/piste/look/settle.ts": "sha256:b7146827415251c21c44dd0c6af9c8e559b2515dd02c22da79e7243290f87b7c",
-    "client/piste/look/shaders.ts": "sha256:f0ae181d043e5951257bc4789412ef615b4798a7907edbf0986f49f1f94de3f6",
+    "client/piste/look/shaders.ts": "sha256:848849b387eba1250245a547ec6f3791dfc04f81052e43ae740d593738793124",
     "client/piste/look/tailor.ts": "sha256:c844cf372a931b4de2300a02e1919cd2ad3a01c693038f3105bacd6e3c7f6f60",
-    "client/piste/main.ts": "sha256:43580f9593260a5bf8ef3408cacac81d10e76d14b55cd7e2fd1d5168fb1d41d7",
+    "client/piste/main.ts": "sha256:92d81825417fafbae119ec8b14dbe327b135ecba2dd731baab95404c6f103a14",
     "client/piste/motion.ts": "sha256:d76ba85ffeccb29a22a90f66d523888ec30755846bd22828b5e110ffb938de3f",
     "client/piste/replay.ts": "sha256:fa4226219b7fd4ae798d0262db8a28a88869d6f5b0c80b7945c53b703bff9453",
     "client/piste/settings.ts": "sha256:f5d13b9affe640e88fb92af95687a83a37dc39d698cf0f0f1fc013ce51dc344c",
