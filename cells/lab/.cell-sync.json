@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:fc56f1cd5a25f5a590890f2ad833a00cc7dc5eca1f67218d09a448a7898e9c5b",
-  "syncedAt": "2026-11-27T19:51:35.993Z",
+  "treeVersion": "tree:342ae0ba9a821149eb4334bab1928d8fe664eff6de24825095de621f4627b37d",
+  "syncedAt": "2026-11-27T19:52:40.661Z",
   "files": {
     "README.md": "sha256:0bf552fbd99c966b00484b4d831c42db1b25a8420e2332a20e39db53d4747e0b",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -282,7 +282,7 @@
     "client/piste/input.ts": "sha256:3ddc13d9e3ea76b2cbde8926c8d85df30935a987e2cfd4b85d7b5f5d17a0d894",
     "client/piste/intent.ts": "sha256:090c6aac2512bf78248ce05c39c0080af0c658d6c8aa245d5303993ec232a281",
     "client/piste/lessons.ts": "sha256:d5482222aebd607311df2e720734a9a18aaa357acde6f6987c60465c7bc7d3fa",
-    "client/piste/look/athlete.ts": "sha256:1b5461fd1042c4d3a17bdfb3d94f2468c025beb86b2afcc9cae2ec785070e4ee",
+    "client/piste/look/athlete.ts": "sha256:e0acb44c91a77b98841bab0928bab50af53788853ef155cb2092538acd4125bb",
     "client/piste/look/body.ts": "sha256:456d223785e7e01b0948631012a244106b44663b02b55769cb4392ed6eeee1ac",
     "client/piste/look/breeches-pattern.json": "sha256:98f2e8e6da0c31b7ac64d28defd301c7fc1cf1577dcf95043d3f30cd7fc85629",
     "client/piste/look/breeches.ts": "sha256:aee5bbbb9d8170fa15c79c3f56a388fb79f4e0714a7a3e1b963aeb6abcb1f101",
