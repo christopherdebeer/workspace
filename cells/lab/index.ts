@@ -7,6 +7,7 @@ import { markdown } from './md';
 import { probe } from './client/squishy-lab/probes';
 import { truthmineApi } from './truthmine-api';
 import { thingsApi } from './things-api';
+import { observeApi } from './things-observe-api';
 
 /**
  * `@c15r/lab` — 3D and GL experiments, one cell.
@@ -305,6 +306,7 @@ const MAX_PLAIN = 1_000_000;
 
 export const handler = async (event: { rawPath?: string; rawQueryString?: string; headers?: Record<string, string | undefined>; requestContext?: {http?: {method?: string}}; body?: string; isBase64Encoded?: boolean }) => {
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/lab(?=\/|$)/, '') || '/';
+  if (path.startsWith('/things/observe/')) return observeApi(event, path.split('/')[3] || '');
   if (path === '/things/api' || path.startsWith('/things/api/')) return thingsApi(event, path.split('/')[3] || '');
   if (path === '/truthmine/api' || path.startsWith('/truthmine/api/')) return truthmineApi(event, path.split('/')[3]);
   try {
