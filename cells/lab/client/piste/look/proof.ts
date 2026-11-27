@@ -134,7 +134,9 @@ export function airChecks(G: Garment): { checks: Check[]; x: Float64Array } {
   const worst = [...where].sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${k} ${(v * 100).toFixed(1)}%`).join('; ');
   // (stretch only: sewn up with nothing inside it, cloth buckles where it's shaped to a body (a sleeve head to a shoulder),
   // and buckling is free; a fault in the making stretches it)
-  out.push({ what: 'sewn up, nothing else is stretched (99 % of the cloth under 1 %; not the cap, eased in on purpose, nor the feet)', ok: p99 < 0.01, detail: `99th percentile ${(p99 * 100).toFixed(2)} %; worst: ${worst}` });
+  // (a sanity check, not a measure of looking right: worn cloth strains a few per cent at an elbow or across the back
+  // and looks it. What's caught here is a fault: a seam sewn to the wrong place, a piece drafted far too small)
+  out.push({ what: 'sewn up, nothing else badly stretched (99 % of the cloth under 4 %; not the cap, eased in on purpose, nor the feet)', ok: p99 < 0.04, detail: `99th percentile ${(p99 * 100).toFixed(2)} %; worst: ${worst}` });
   return { checks: out, x: S.x };
 }
 

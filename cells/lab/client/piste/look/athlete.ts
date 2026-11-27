@@ -776,7 +776,8 @@ function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W
         w = [...weights].filter(([, v]) => v > 0);
       }
       // (what the eye inside the mask doesn't see of its own body: the jacket, the rear sleeve, the top of its own sleeve)
-      const part = pc.kind === 'jacket' ? PART.torso : pc.kind === 'sleeveR' ? PART.rearArm : row < 0.4 ? PART.upperSleeve : PART.always;
+      // (and the weapon sleeve's cap: it sits round the shoulder, a hand's breadth from the eye, and fills the view)
+      const part = pc.kind === 'jacket' ? PART.torso : pc.kind === 'sleeveR' ? PART.rearArm : row < 0.25 ? PART.torso : row < 0.4 ? PART.upperSleeve : PART.always;
       m.vert(p, norm(N[i]), [0.95, D.seam[i], TONE.jacket], MAT.fabric, [D.uv[i * 2], D.uv[i * 2 + 1]], w, [0, 0, 0, part]);
     }
     pieces.push({ kind: pc.kind, base: base + pc.base, R: pc.rows, J: pc.cols, closed: false, joint: pc.kind === 'jacket' ? undefined : elbowRow,

@@ -105,11 +105,11 @@ const you: Controller = {
 };
 if (lesson) thumbs.allow = { ...lesson.controls };
 const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
-// (`jacket=draft`: the jacket drafted and settled by devtools/piste-jacket.mjs, on both fencers, to see it dressed)
+// (the fencers wear the jacket drafted and settled by devtools/piste-jacket.mjs; `jacket=loft`: the lofted one it replaced)
 // (dressed before anything runs, so a still's cloth has the same history in either jacket)
 const dressed: Promise<void> = (() => {
   const root = document.documentElement.dataset.assets;
-  if (qs.get('jacket') !== 'draft' || !root) return Promise.resolve();
+  if (qs.get('jacket') === 'loft' || !root) return Promise.resolve();
   return fetch(root + 'jacket-draft.json').then((r) => r.json()).then((d) => renderer.setDraft(d)).catch((e) => console.warn('no drafted jacket', e));
 })();
 const director = new TimeDirector(bout, assist);

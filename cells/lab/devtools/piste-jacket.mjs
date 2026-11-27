@@ -130,7 +130,7 @@ for (let round = 1; round <= ROUNDS; round++) {
 Object.assign(P, best.P); G = best.G; S = best.S;
 console.log(`\nbest: ${pct(best.score)} (stretch p90 and half the seams' p90 gap)`);
 writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.url), JSON.stringify(P, null, 1));
-// the settled jacket, for the game to dress the fencers in (`?jacket=draft`): its points in the fencer's frame (this one
+// the settled jacket, for the game to dress the fencers in (the default; `?jacket=loft` for the old one): its points in the fencer's frame (this one
 // stands at the origin facing +x, so its frame is the world's), its triangles, its weave's coordinates (the paper), and
 // each point's distance on the paper to its piece's edge (where the seams are)
 {

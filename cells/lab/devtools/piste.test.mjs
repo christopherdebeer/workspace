@@ -408,7 +408,7 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   const parts = ev.filter((e) => e.type === 'light').map((e) => e.light.part);
   console.log(`      (${b.score.join('–')} in ${simulated.toFixed(0)} s, ${ms.toFixed(0)} ms; touches on ${parts.join(', ')})`);
 }
-// the drafted jacket (?jacket=draft) holds together, skinned, through an extension, a replay's copy and the recovery
+// the drafted jacket (the default) holds together, skinned, through an extension, a replay's copy and the recovery
 {
   const { spawnSync } = await import('node:child_process');
   const r = spawnSync(process.execPath, [new URL('./piste-jacket-motion.mjs', import.meta.url).pathname], { encoding: 'utf8' });
