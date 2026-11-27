@@ -27,6 +27,16 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'things', title: 'Things', group: 'Contemplation', tags: ['hci'],
+    blurb: 'Three things. Relate, enclose, compose, enter. A study of conceptualisation before computation: shared identities, private viewpoints, and abstractions made by inhabitants.',
+    page: 'static/things.html', preview: 'preview', readme: 'static/things.md', presets: [{label:'enter',query:''}],
+  },
+  {
+    id: 'truthmine', title: 'Truth Mine', group: 'Contemplation', tags: ['hci'],
+    blurb: 'Something is changing. Leave a trace, compare moments, compose an instrument and leave it for another inhabitant. A small experiment in a world that grows through inquiry.',
+    page: 'static/truthmine.html', preview: 'preview', readme: 'static/truthmine.md', presets: [{label:'enter',query:''}],
+  },
+  {
     id: 'penny', title: 'Penny Vision', group: 'Perception', tags: ['hci'],
     blurb: 'Virtual reality for small change. Three engraved optical plates in red and cyan. Turn the specimen, rack the focus, and watch the two impressions register.',
     page: 'static/penny.html', preview: 'preview', readme: 'static/penny.md',

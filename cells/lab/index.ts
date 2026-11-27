@@ -5,6 +5,8 @@ import { gzipSync } from 'node:zlib';
 import { EXPERIMENTS, groups, type Experiment } from './experiments';
 import { markdown } from './md';
 import { probe } from './client/squishy-lab/probes';
+import { truthmineApi } from './truthmine-api';
+import { thingsApi } from './things-api';
 
 /**
  * `@c15r/lab` — 3D and GL experiments, one cell.
@@ -301,8 +303,10 @@ const text = (statusCode: number, type: string, body: string, cache: string) => 
  * takes gzip. */
 const MAX_PLAIN = 1_000_000;
 
-export const handler = async (event: { rawPath?: string; rawQueryString?: string; headers?: Record<string, string | undefined> }) => {
+export const handler = async (event: { rawPath?: string; rawQueryString?: string; headers?: Record<string, string | undefined>; requestContext?: {http?: {method?: string}}; body?: string; isBase64Encoded?: boolean }) => {
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/lab(?=\/|$)/, '') || '/';
+  if (path === '/things/api' || path.startsWith('/things/api/')) return thingsApi(event, path.split('/')[3] || '');
+  if (path === '/truthmine/api' || path.startsWith('/truthmine/api/')) return truthmineApi(event, path.split('/')[3]);
   try {
     const b = build();
     // (the lab's probes, one route for them all: client/squishy-lab/probes.ts)

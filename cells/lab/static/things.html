@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-exp="things">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Things — a grammar of conceptualisation</title>
+<style>
+:root{color-scheme:light;--paper:#eeede5;--ink:#27302d;--muted:#626c64;--line:#b9bdb1;--green:#315f51;--rust:#a44b34;--panel:#e5e6dc}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:clamp(13px,3vw,32px);min-height:100dvh;display:flex;flex-direction:column;gap:12px}header,.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}header a,a{color:var(--muted);text-decoration:none}.mono,small{font:11px/1.45 ui-monospace,monospace;color:var(--muted);letter-spacing:.025em}.spacer{flex:1}h1{font:normal clamp(26px,4vw,40px)/1.1 Georgia,serif;margin:8px 0 0}h2{font:normal 22px Georgia,serif;margin:0 0 5px}p{margin:4px 0}button,input{font:inherit;color:inherit}button{border:1px solid var(--line);background:transparent;padding:8px 11px;min-height:40px;border-radius:3px;cursor:pointer}button:disabled{opacity:.4;cursor:default}button:focus-visible,input:focus-visible{outline:2px solid var(--green);outline-offset:2px}button.primary{background:var(--green);color:white;border-color:var(--green)}button.active{border-color:var(--rust);color:var(--rust)}button.quiet{border:0;color:var(--muted);font-size:13px}button.chip{font-size:12px;min-height:34px}.field{position:relative;border:1px solid var(--line);overflow:hidden;background:#f5f4ec;min-height:300px}#field{display:block;width:100%;height:clamp(300px,55dvh,580px);touch-action:none;user-select:none;-webkit-user-select:none}.hint{min-height:20px;color:var(--muted);font-size:13px}.toolbar{min-height:48px;align-items:center}.panel{background:var(--panel);padding:13px;border:1px solid var(--line)}#nearby{border-top:1px solid var(--line);padding-top:10px}#nearItems{max-height:130px;overflow:auto;display:flex;flex-wrap:wrap;gap:6px}.error{color:var(--rust)}#status{min-height:18px}details{border-top:1px solid var(--line);padding-top:9px}summary{color:var(--muted);cursor:pointer}input{width:min(100%,310px);border:1px solid var(--line);background:var(--paper);padding:9px;border-radius:3px}#names{max-height:140px;overflow:auto}#crumbs{min-height:34px}.field svg text{pointer-events:none}.preview header,.preview #crumbs,.preview #toolbar,.preview #hint,.preview #inspector,.preview #nearby,.preview #room,.preview #status{display:none}.preview main{padding:10px;gap:4px;min-height:0}.preview h1{font-size:23px}.preview #field{height:230px}.preview .field{min-height:0}
+[hidden]{display:none!important}
+</style>
+</head>
+<body><main>
+<header><a class="mono" href="/">← lab</a><span class="spacer"></span><span class="mono">THINGS / 001</span><a class="mono" href="{{readme}}">notes ↗</a></header>
+<h1 id="heading">Three things.</h1>
+<div class="row" id="crumbs" aria-label="Current context"></div>
+<div class="field"><svg id="field" role="group" aria-label="A field of things. Tap to select, drag to move, draw a loop on empty space to select several." xmlns="http://www.w3.org/2000/svg"></svg></div>
+<div class="hint" id="hint" aria-live="polite">Touch something.</div>
+<div class="row toolbar" id="toolbar"></div>
+<div id="inspector" hidden></div>
+<section id="nearby" hidden><div class="row"><small>BEYOND THIS VIEW</small><span class="spacer"></span><button id="showAll" class="quiet">Reveal all</button></div><p class="hint" id="nearHint"></p><div id="nearItems"></div></section>
+<details id="room"><summary>Inhabitants &amp; views</summary><p class="mono" id="roomInfo"></p><div class="row"><button id="share">Open shared room</button><button id="copy" hidden>Copy invitation</button><button id="identity">Enter as another inhabitant</button><button id="resetView">Reset my view</button></div><p class="hint">The same things, different views. Invitation links allow anyone who has them to read and contribute; identities are pseudonymous. Do not enter private information.</p></details>
+<div class="mono" id="status" aria-live="polite"></div>
+</main><script type="module" src="{{app}}"></script></body></html>
