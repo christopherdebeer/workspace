@@ -96,10 +96,11 @@ export function draftJacket(B: Body): JacketPattern {
     lengths: (() => { const S = slice(B, B.shoulder[1] - 0.05), fr = S.radius(scale(B.r, -1)), bk = S.radius(B.r); return { FW: length + fr, FR: length + fr, BW: length + bk, BR: length + bk }; })(),
     armhole: (B.shoulder[1] - 0.15) - hem, drop: 0.045, neckW: 0.075, neckFront: 0.085, neckBack: 0.025,
     shoulderW: 0.19,
+    // (the rear sleeve's cuff fitted to the bare wrist, 21 cm round (the weapon's goes into the glove's gauntlet))
     // (the weapon sleeve cut bent, as a fencing jacket's is, for the arm in guard: a straight tube round a bent arm has
     // the inside of the elbow's length to lose and folds over itself there. Its outside 16 cm longer than its inside, its
     // middle half a centimetre short of the arm: the bend takes up the 2 cm a straight sleeve is given to move in)
-    sleeves: { W: { ...sleeve(B.armW), length: armLen(B.armW) - 0.005, bend: 0.16 }, R: sleeve(B.armR) }, capEase: 0.04, moves: ['drafted from the body'],
+    sleeves: { W: { ...sleeve(B.armW), length: armLen(B.armW) - 0.005, bend: 0.16 }, R: { ...sleeve(B.armR), round: [0.42, 0.38, 0.34, 0.29, 0.21] } }, capEase: 0.04, moves: ['drafted from the body'],
   };
   // (the armhole as deep as gives it its length round: a jacket's is about half the chest and 2 cm, for a sleeve set in
   // round a shoulder and an arm that has to reach (the chest measured round, a little below the armpits))
@@ -118,7 +119,7 @@ const interp = (xs: number[], ys: number[], x: number) => {
 };
 
 /** a piece meshed: its points' rest places on the paper and first places round the body; its grid */
-export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve' | 'gusset' | 'breeches'; quarter?: Quarter; side?: 'W' | 'R' }
+export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve' | 'gusset' | 'breeches' | 'collar'; quarter?: Quarter; side?: 'W' | 'R' }
 /** a stitch: point p sewn to the place between q and q2 (t of the way) */
 export interface Stitch { p: number; q: number; q2: number; t: number; /** which seam it's part of */ seam?: string }
 /** a point held at a place (a cuff under the glove's gauntlet) */
@@ -263,7 +264,7 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
         // (one paper for both: each is laid with its underarm seam toward the body and its first quarter to the front, and
         // the body's on opposite sides of the two arms, so the pair comes out mirror images, as a pair is cut)
         piece.flat.push([(c / (SCOLS - 1) - 0.5) * rnd, t * S.length + bendY + cap[c][1] * fade * fade]);
-        const phi = (c / (SCOLS - 1)) * Math.PI * 2, rad = r === SROWS - 1 ? 0.045 : Math.min(0.09, rnd / (Math.PI * 2) + 0.01);
+        const phi = (c / (SCOLS - 1)) * Math.PI * 2, rad = r === SROWS - 1 ? (s === 'R' ? rnd / (Math.PI * 2) + 0.004 : 0.045) : Math.min(0.09, rnd / (Math.PI * 2) + 0.01);
         piece.at.push(madd(madd(p, down, Math.cos(phi) * rad), side2, Math.sin(phi) * rad));
       }
     }
@@ -321,6 +322,33 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       }
       n += Gn * Gn;
     }
+  }
+  // the collar: a band stood round the neck, sewn by length round the neckline (each quarter's inside edge above where the
+  // centre seams stop: the centre front up over the weapon shoulder, down to the centre back, up over the other shoulder
+  // and down to the centre front again), its two ends fastened at the front, under the bib
+  {
+    const neckEdge = (q: Quarter, depth: number, up: boolean) => { const r0 = neckRow(P4[q], depth), ids: number[] = []; for (let r = r0; r < ROWS; r++) ids.push(at(P4[q], r, 0)); return up ? ids : ids.reverse(); };
+    // (each piece's whole edge: where one meets the next they're one point sewn, the step between them no length)
+    const loopIds = [...neckEdge('FW', P.neckFront, true), ...neckEdge('BW', P.neckBack, false), ...neckEdge('BR', P.neckBack, true), ...neckEdge('FR', P.neckFront, false)];
+    // (the neckline's length, step by step on each piece's own paper; across a seam (one point on two papers) nothing)
+    const pieceOf = (i: number) => pieces.findIndex((pc) => i >= pc.base && i < pc.base + pc.rows * pc.cols);
+    const Ls: number[] = [0]; for (let k = 1; k < loopIds.length; k++) { const a = loopIds[k - 1], b = loopIds[k]; Ls.push(Ls[k - 1] + (pieceOf(a) === pieceOf(b) ? Math.hypot(flatAll[a][0] - flatAll[b][0], flatAll[a][1] - flatAll[b][1]) : 0)); }
+    const neckLen = Ls[Ls.length - 1], CR = 4, CC = 25, HIGH = 0.045;
+    const piece: Piece = { name: 'collar', rows: CR, cols: CC, flat: [], at: [], base: n, kind: 'collar' };
+    // (where along the neckline a length falls: the two points it's between, and how far)
+    const along = (want: number): [number, number, number] => { let k = 0; while (k < Ls.length - 2 && Ls[k + 1] < want) k++; return [loopIds[k], loopIds[k + 1], (want - Ls[k]) / Math.max(1e-9, Ls[k + 1] - Ls[k])]; };
+    const centre = add(B.pelvis, [0, B.shoulder[1] + 0.06 - B.pelvis[1], 0]);
+    for (let r = 0; r < CR; r++) for (let c = 0; c < CC; c++) {
+      const want = (c / (CC - 1)) * neckLen, [qa, qb, t] = along(want), base0 = add(scale(atAll[qa], 1 - t), scale(atAll[qb], t));
+      const toNeck = norm(sub([centre[0], base0[1], centre[2]], base0)), u = r / (CR - 1);
+      // (the band a little shorter at its top edge, so it stands in close round the neck)
+      piece.flat.push([want * (1 - 0.03 * u), u * HIGH]);
+      piece.at.push(madd(madd(base0, [0, 1, 0], u * HIGH), toNeck, u * 0.012));
+    }
+    pieces.push(piece); flatAll.push(...piece.flat); atAll.push(...piece.at);
+    for (let c = 0; c < CC; c++) { const [qa, qb, t] = along((c / (CC - 1)) * neckLen); stitches.push({ p: n + c, q: qa, q2: qb, t, seam: 'collar' }); }
+    for (let r = 1; r < CR; r++) pair(n + r * CC + CC - 1, n + r * CC, 'collar fastening');
+    n += CR * CC;
   }
   // the crotch strap: the centre front's hem to the centre back's, under the crotch (a little below the hem between the
   // legs), no longer than that

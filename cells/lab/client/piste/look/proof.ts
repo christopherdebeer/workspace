@@ -37,7 +37,7 @@ export function paperChecks(G: Garment, o: { capEase: number }): Check[] {
       const samePiece = G.pieces.find((p) => q0.q >= p.base && q0.q < p.base + p.rows * p.cols)?.name === G.pieces.find((p) => q1.q >= p.base && q1.q < p.base + p.rows * p.cols)?.name;
       b += samePiece ? Math.hypot(pa[0] - pb[0], pa[1] - pb[1]) : 0;
     }
-    if (name.startsWith('sleeve cap')) {
+    if (name.startsWith('sleeve cap') || name === 'collar') {
       // (the whole cap row against the whole armhole: its points, in the order sewn, each step measured on its own piece's
       // paper; across the shoulder point, where the front's piece meets the back's, nothing: they're one point there)
       const sl = G.pieces.find((pc) => st[0].p >= pc.base && st[0].p < pc.base + pc.rows * pc.cols)!;
@@ -46,6 +46,8 @@ export function paperChecks(G: Garment, o: { capEase: number }): Check[] {
       loop.sort((i, j) => i - j);
       const pieceOfQ = (i: number) => G.pieces.findIndex((pc) => i >= pc.base && i < pc.base + pc.rows * pc.cols);
       b = 0; for (let k = 1; k < loop.length; k++) if (pieceOfQ(loop[k]) === pieceOfQ(loop[k - 1])) b += flatDist(G, loop[k - 1], loop[k]);
+      // (the collar: its edge the neckline's length, no more: no ease)
+      if (name === 'collar') { const d = Math.abs(a - b); out.push({ what: `${name}: both edges the same length`, ok: d < 0.005, detail: `${(a * 100).toFixed(1)} and ${(b * 100).toFixed(1)} cm (${(d * 1000).toFixed(0)} mm apart)` }); continue; }
       // (and each half into its own half: the crown at the shoulder seam)
       const sl2 = G.pieces.find((pc) => st[0].p >= pc.base && st[0].p < pc.base + pc.rows * pc.cols)!, mid = Math.round((sl2.cols - 1) / 2);
       const crown = st.find((x) => x.p === sl2.base + mid) ?? st[mid], crownQ = crown.t < 0.5 ? crown.q : crown.q2;

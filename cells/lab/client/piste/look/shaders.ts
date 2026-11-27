@@ -194,15 +194,26 @@ void main(){
     int tone = int(vC.b + 0.5);
     alb = tone == 0 ? vec3(0.66, 0.655, 0.625) : tone == 1 ? vec3(0.62, 0.615, 0.59) : tone == 2 ? vec3(0.52, 0.5, 0.46) : vec3(0.69, 0.69, 0.67);
     vec2 q = vT * 700.0; vec2 fw = fwidth(q);
-    float seen = clamp(1.0 - max(fw.x, fw.y) * 0.9, 0.0, 1.0);
+    // (faded out well before a thread is a pixel: finer, it only aliases into moiré)
+    float seen = 1.0 - smoothstep(0.18, 0.4, max(fw.x, fw.y));
     float weave = sin(q.x * 6.2832) * sin(q.y * 6.2832) * 0.5 + sin((q.x + q.y) * 3.1416) * 0.5;
     alb *= 1.0 + 0.07 * weave * seen;
     // the relief: a twill's diagonal ribs (about 1.4 mm apart, as a heavy drill's), faded out where finer than a pixel;
     // and each seam a raised welt, its stitches pressed in
-    vec2 tq = vT * 720.0; float tseen = clamp(1.0 - max(fwidth(tq.x + tq.y), 0.0) * 0.8, 0.0, 1.0);
-    float rib = sin((tq.x + tq.y) * 3.1416) * 0.00009 * tseen;
-    float welt = 0.0007 * (1.0 - smoothstep(0.0, 0.0065, seamD)) * (1.0 - 0.35 * step(0.6, fract(vT.y * 110.0)));
-    N = bump(N, rib + welt);
+    vec2 tq = vT * 720.0; float tseen = 1.0 - smoothstep(0.3, 0.75, fwidth(tq.x + tq.y));
+    float rib = sin((tq.x + tq.y) * 3.1416) * 0.00022 * tseen;
+    // (the weave's coarser grain, the cotton's slubs: a few millimetres, seen where the ribs aren't)
+    vec2 sq = vT * vec2(160.0, 260.0); float sseen = 1.0 - smoothstep(0.35, 0.9, max(fwidth(sq.x), fwidth(sq.y)));
+    float slub = (vnoise(sq) - 0.5) * 0.00035 * sseen;
+    // (creases: the lived-in wrinkling under the folds, a few centimetres long, running across the garment (ridged noise
+    // stretched along its length), each fading in and out: a finer complement to the folds the cloth makes)
+    vec2 cq = vec2(vT.x * 11.0 + 0.6 * vnoise(vT * 7.0), vT.y * 34.0 + 1.4 * vnoise(vT * 5.0 + 3.0));
+    float ridge = 1.0 - abs(vnoise(cq) * 2.0 - 1.0), patchy = smoothstep(0.35, 0.8, vnoise(vT * vec2(4.0, 6.0) + 9.0));
+    float crease = ridge * ridge * patchy * 0.0016;
+    float welt = 0.0011 * (1.0 - smoothstep(0.0, 0.007, seamD)) * (1.0 - 0.4 * step(0.6, fract(vT.y * 110.0)));
+    N = bump(N, rib + slub + crease + welt);
+    // (a crease's valley a little shut in, its ridge a little lit: the light alone doesn't make it read at a distance)
+    alb *= 1.0 - 0.08 * patchy * (1.0 - ridge);
     // the seam: a narrow darker line, stitched
     float sl = (1.0 - smoothstep(0.0018, 0.0045, seamD)), st = step(0.5, fract(vT.y * 110.0));
     alb *= 1.0 - sl * (0.10 + 0.055 * st);

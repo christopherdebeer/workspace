@@ -76,7 +76,7 @@ for (let round = 1; round <= ROUNDS; round++) {
   const moves = [], upper = [], candidates = [];
   const propose = (sev, family, key, apply) => candidates.push({ sev, family, key, apply });
   G.pieces.forEach((pc, pi) => {
-    if (pc.kind === 'gusset') return;   // (cut to its edges: nothing of its own to alter)
+    if (pc.kind === 'gusset' || pc.kind === 'collar') return;   // (cut to its edges: nothing of its own to alter)
     const bands = pc.kind === 'body' ? P.stations.length : P.sleeves[pc.side].stations.length;
     const rows = [];
     for (let b = 0; b < bands; b++) {
