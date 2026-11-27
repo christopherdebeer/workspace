@@ -24,8 +24,8 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
       add(r, c + 1, 'across'); add(r + 1, c, 'along'); add(r + 1, c + 1, 'diag'); add(r + 1, c - 1, 'diag'); add(r + 2, c, 'bend'); add(r, c + 2, 'bend');
     }
   });
-  // (the jacket's body goes round the trunk; its sleeves round the arms too)
-  const isSleeve = new Uint8Array(n); G.pieces.forEach((pc) => { if (pc.kind === 'sleeve') isSleeve.fill(1, pc.base, pc.base + pc.rows * pc.cols); });
+  // (the jacket's body goes round the trunk; its sleeves round the arms too, and the gussets under them)
+  const isSleeve = new Uint8Array(n); G.pieces.forEach((pc) => { if (pc.kind !== 'body') isSleeve.fill(1, pc.base, pc.base + pc.rows * pc.cols); });
   const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 };
   const STEP = 0.005;
   const h = 1 / 240, steps = Math.round((o.seconds ?? 6) / h), thick = o.thick ?? 0.004;

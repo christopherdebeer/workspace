@@ -56,7 +56,7 @@ for (let round = 1; round <= ROUNDS; round++) {
   S = M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined });
   const X = (i) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
   const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
-  const isSl = (i) => G.pieces.some((pc) => pc.kind === 'sleeve' && i >= pc.base && i < pc.base + pc.rows * pc.cols);
+  const isSl = (i) => G.pieces.some((pc) => pc.kind !== 'body' && i >= pc.base && i < pc.base + pc.rows * pc.cols);
   const off = Array.from({ length: G.n }, (_, i) => field ? (isSl(i) ? field : fieldTrunk).at(X(i)).d : M.clearance(X(i), isSl(i) ? B.sleeveCaps : B.bodyCaps));
   const gaps = G.stitches.map((s) => Math.hypot(...[0, 1, 2].map((k) => S.x[s.p * 3 + k] - (S.x[s.q * 3 + k] * (1 - s.t) + S.x[s.q2 * 3 + k] * s.t))));
   // (the score: stretch, seams, and a hem riding up (a jacket that rides up doesn't fit), each in comparable terms)
@@ -76,6 +76,7 @@ for (let round = 1; round <= ROUNDS; round++) {
   const moves = [], upper = [], candidates = [];
   const propose = (sev, family, key, apply) => candidates.push({ sev, family, key, apply });
   G.pieces.forEach((pc, pi) => {
+    if (pc.kind === 'gusset') return;   // (cut to its edges: nothing of its own to alter)
     const bands = pc.kind === 'body' ? P.stations.length : P.sleeves[pc.side].stations.length;
     const rows = [];
     for (let b = 0; b < bands; b++) {
@@ -159,7 +160,7 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
     let vote = 0;
     for (let r = 0; r < pc.rows - 1; r++) for (let cc = 0; cc < pc.cols - 1; cc++) {
       const a = pc.base + r * pc.cols + cc, A = Xs(a), Bp = Xs(a + 1), C = Xs(a + pc.cols + 1), u = Bp.map((v, k) => v - A[k]), w = C.map((v, k) => v - A[k]);
-      const nrm = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], mid = A.map((v, k) => (v + Bp[k] + C[k]) / 3), ax = axisNear(mid, pc.kind === 'sleeve' ? B.sleeveCaps : B.bodyCaps);
+      const nrm = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], mid = A.map((v, k) => (v + Bp[k] + C[k]) / 3), ax = axisNear(mid, pc.kind !== 'body' ? B.sleeveCaps : B.bodyCaps);
       vote += Math.sign(nrm.reduce((s2, v, k) => s2 + v * (mid[k] - ax[k]), 0));
     }
     const out = vote >= 0; if (!out) flipped.push(pc.name);
@@ -171,7 +172,7 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
     }
   });
   // (and to simulate it: its pieces (grids on their paper), each point's place on the paper, what's sewn to what)
-  const pieces = G.pieces.map((pc) => ({ name: pc.name, kind: pc.kind === 'body' ? 'jacket' : pc.side === 'W' ? 'sleeveW' : 'sleeveR', base: pc.base, rows: pc.rows, cols: pc.cols }));
+  const pieces = G.pieces.map((pc) => ({ name: pc.name, kind: pc.kind !== 'sleeve' ? 'jacket' : pc.side === 'W' ? 'sleeveW' : 'sleeveR', base: pc.base, rows: pc.rows, cols: pc.cols }));
   const flat = G.flat.flatMap((p) => [r3(p[0]), r3(p[1])]);
   const seams = G.stitches.map((st) => [st.p, st.t < 0.5 ? st.q : st.q2]);
   // (welded: each point sewn to another piece follows the points it's sewn between, and they follow none themselves.

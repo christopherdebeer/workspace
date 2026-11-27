@@ -118,7 +118,7 @@ const interp = (xs: number[], ys: number[], x: number) => {
 };
 
 /** a piece meshed: its points' rest places on the paper and first places round the body; its grid */
-export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve'; quarter?: Quarter; side?: 'W' | 'R' }
+export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve' | 'gusset'; quarter?: Quarter; side?: 'W' | 'R' }
 /** a stitch: point p sewn to the place between q and q2 (t of the way) */
 export interface Stitch { p: number; q: number; q2: number; t: number; /** which seam it's part of */ seam?: string }
 /** a point held at a place (a cuff under the glove's gauntlet) */
@@ -132,6 +132,8 @@ const ROWS = 32, COLS = 12, SROWS = 30, SCOLS = 18;
 /** the body's grid row the underarm always falls on: the rows below and above it are spaced to the pattern's heights, so
  * an alteration (a deeper armhole) moves points a little, never a seam's row across at a stroke */
 export const ARM_ROW = 19;
+/** the underarm gusset's depth, in rows of the body and of the sleeve: about 8 cm each way */
+export const GUSSET = 4;
 /** the body grid's row (fractional) at a height above the hem */
 export const rowAt = (P: JacketPattern, h: number) => (h <= P.armhole ? (h / P.armhole) * ARM_ROW : ARM_ROW + ((h - P.armhole) / (P.length - P.armhole)) * (ROWS - 1 - ARM_ROW));
 
@@ -189,7 +191,8 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
   for (let r = 0; r <= neckRow(P4.BW, P.neckBack); r++) pair(at(P4.BW, r, 0), at(P4.BR, r, 0), 'centre back');
   const armRow = ARM_ROW;
   for (const s of ['W', 'R'] as const) {
-    for (let r = 0; r <= armRow; r++) pair(at(P4[`F${s}`], r, COLS - 1), at(P4[`B${s}`], r, COLS - 1), `side seam ${s}`);
+    // (the side seam stops short of the underarm by the gusset's depth: the gusset's let in above it)
+    for (let r = 0; r <= armRow - GUSSET; r++) pair(at(P4[`F${s}`], r, COLS - 1), at(P4[`B${s}`], r, COLS - 1), `side seam ${s}`);
     for (let c = 0; c < COLS; c++) pair(at(P4[`F${s}`], ROWS - 1, c), at(P4[`B${s}`], ROWS - 1, c), `shoulder ${s}`);
   }
   // ── the sleeves: tubes along the arms, each cap sewn round its armhole ──
@@ -268,7 +271,7 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     // the cuff, held round the wrist under the glove's gauntlet (where the sleeve's been laid: its last ring)
     for (let c = 0; c < SCOLS - 1; c++) pins.push({ p: n + (SROWS - 1) * SCOLS + c, at: piece.at[(SROWS - 1) * SCOLS + c] });
     // the underarm seam; the cap round the armhole by length, turned so the sleeve doesn't twist
-    for (let r = 0; r < SROWS; r++) pair(n + r * SCOLS + SCOLS - 1, n + r * SCOLS, `underarm ${s}`);
+    for (let r = GUSSET; r < SROWS; r++) pair(n + r * SCOLS + SCOLS - 1, n + r * SCOLS, `underarm ${s}`);
     // (the cap's first half to the armhole's front edge: the loop starts at the front's underarm)
     const nearFront = true;
     for (let c = 0; c < SCOLS - 1; c++) {
@@ -282,6 +285,42 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       stitches.push({ p: n + c, q: loop[k], q2: loop[k + 1], t: (want - L[k]) / Math.max(1e-9, L[k + 1] - L[k]), seam: `sleeve cap ${s}` });
     }
     n += SROWS * SCOLS;
+    // the gusset: a diamond let in under the arm, where the side seam and the sleeve's underarm seam meet, each of them
+    // unpicked for its last few rows. Its four edges: the front's side edge, the back's, the sleeve's back underarm edge
+    // and its front one, each cut to the length of the edge it's sewn to. Raised, an arm draws it open, instead of
+    // stretching the cloth round the armhole across the gap between the ribs and the arm
+    {
+      const sb = n - SROWS * SCOLS, K = GUSSET, Gn = K + 1, last = COLS - 1;
+      const eA = Array.from({ length: Gn }, (_, j) => at(F, armRow - j, last));            // front: underarm down
+      const eB = Array.from({ length: Gn }, (_, j) => at(Bk, armRow - K + j, last));       // back: up to its underarm
+      const eD = Array.from({ length: Gn }, (_, j) => sb + j * SCOLS);                     // sleeve front: underarm down
+      const eC = Array.from({ length: Gn }, (_, j) => sb + (K - j) * SCOLS + SCOLS - 1);   // sleeve back: up to the underarm
+      const L = (ids: number[]) => ids.slice(1).reduce((a, id, k) => a + Math.hypot(flatAll[id][0] - flatAll[ids[k]][0], flatAll[id][1] - flatAll[ids[k]][1]), 0);
+      const LA = L(eA), LB = L(eB), LC = L(eC), LD = L(eD);
+      // (on its own paper: one corner square, the fourth where its last two edges' lengths meet)
+      const cAD: [number, number] = [0, 0], cAB: [number, number] = [LA, 0], cCD: [number, number] = [0, LD];
+      const dx = cCD[0] - cAB[0], dy = cCD[1] - cAB[1], dd = Math.hypot(dx, dy), a2 = (LB * LB - LC * LC + dd * dd) / (2 * dd), h2 = Math.sqrt(Math.max(0, LB * LB - a2 * a2));
+      const cBC: [number, number] = [cAB[0] + (a2 * dx) / dd + (h2 * dy) / dd, cAB[1] + (a2 * dy) / dd - (h2 * dx) / dd];
+      const far = (cBC[0] + cBC[1]) > (cAB[0] + (a2 * dx) / dd - (h2 * dy) / dd + cAB[1] + (a2 * dy) / dd + (h2 * dx) / dd) ? cBC : [cAB[0] + (a2 * dx) / dd - (h2 * dy) / dd, cAB[1] + (a2 * dy) / dd + (h2 * dx) / dd] as [number, number];
+      const piece: Piece = { name: `gusset ${s}`, rows: Gn, cols: Gn, flat: [], at: [], base: n, kind: 'gusset', side: s };
+      const mix2 = (a: number[], b: number[], t: number) => a.map((v, k) => v + (b[k] - v) * t);
+      for (let r = 0; r < Gn; r++) for (let c = 0; c < Gn; c++) {
+        const u = c / K, v = r / K;
+        // (the weapon side's cut mirror-wise, as the two sides of a jacket are)
+        const fp = mix2(mix2(cAD, cAB, u), mix2(cCD, far, u), v);
+        piece.flat.push([s === 'W' ? -fp[0] : fp[0], fp[1]]);
+        piece.at.push(mix2(mix2(atAll[eA[0]], atAll[eA[K]], u), mix2(atAll[eC[0]], atAll[eC[K]], u), v) as V);
+      }
+      pieces.push(piece); flatAll.push(...piece.flat); atAll.push(...piece.at);
+      const g = (r: number, c: number) => n + r * Gn + c;
+      for (let j = 0; j < Gn; j++) {
+        pair(g(0, j), eA[j], `gusset ${s}: front`);
+        pair(g(j, K), eB[j], `gusset ${s}: back`);
+        pair(g(K, j), eC[j], `gusset ${s}: sleeve back`);
+        pair(g(j, 0), eD[j], `gusset ${s}: sleeve front`);
+      }
+      n += Gn * Gn;
+    }
   }
   // the crotch strap: the centre front's hem to the centre back's, under the crotch (a little below the hem between the
   // legs), no longer than that

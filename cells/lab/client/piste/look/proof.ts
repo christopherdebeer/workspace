@@ -9,7 +9,7 @@
  *   each seam the two pieces face the same way (a piece sewn in twisted, or inside out, faces the other way at the seam).
  */
 import type { V } from '../v3';
-import type { Garment } from './draft';
+import { type Garment, ARM_ROW } from './draft';
 import { settle } from './settle';
 import type { Capsule } from '../fencer';
 
@@ -79,7 +79,8 @@ function facingOf(G: Garment, pc: Garment['pieces'][number]): number {
   const A = (i: number) => G.at[i], body = G.pieces.filter((p) => p.kind === 'body');
   let sum = 0;
   for (let r = 1; r < pc.rows - 1; r++) {
-    const ring = pc.kind === 'body' ? body.flatMap((p) => Array.from({ length: p.cols }, (_, c) => p.base + r * p.cols + c)) : Array.from({ length: pc.cols - 1 }, (_, c) => pc.base + r * pc.cols + c);
+    // (a gusset: out from the trunk's middle at the underarm)
+    const ring = pc.kind === 'gusset' ? body.flatMap((p) => Array.from({ length: p.cols }, (_, c) => p.base + ARM_ROW * p.cols + c)) : pc.kind === 'body' ? body.flatMap((p) => Array.from({ length: p.cols }, (_, c) => p.base + r * p.cols + c)) : Array.from({ length: pc.cols - 1 }, (_, c) => pc.base + r * pc.cols + c);
     const m = ring.reduce((acc, i) => acc.map((v, k) => v + A(i)[k] / ring.length), [0, 0, 0]);
     for (let c = 1; c < pc.cols - 1; c++) {
       const i = pc.base + r * pc.cols + c, u = A(i + 1).map((v, k) => v - A(i - 1)[k]), w = A(i + pc.cols).map((v, k) => v - A(i - pc.cols)[k]);
