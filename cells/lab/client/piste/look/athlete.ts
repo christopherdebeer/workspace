@@ -598,8 +598,9 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
   // outsole, pitched along the foot, thicker at the heel, its toe sprung up a little; the upper rounded over it, high and
   // padded at the heel's collar, low over the toes; two dark stripes crossing each side, rising toward the laces ────────
   const shoe = (k: number, bone: number) => {
-    const heel = c[k].a, toe = c[k].b, d = norm(sub(toe, heel)), side = norm(cross(up, d)), L = len(sub(toe, heel)) + 0.06;
-    const back = madd(heel, d, -0.035), base = -0.04, NR = 24;
+    // (the shoe's back 7 cm behind the ankle, as a heel and its counter are: the ankle over the heel, the toes well ahead)
+    const heel = c[k].a, toe = c[k].b, d = norm(sub(toe, heel)), side = norm(cross(up, d)), L = len(sub(toe, heel)) + 0.03;
+    const back = madd(heel, d, -0.005), base = -0.04, NR = 24;
     const outRings: Ring[] = [], soleRings: Ring[] = [], upperRings: Ring[] = [];
     for (let i = 0; i < NR; i++) {
       const s = i / (NR - 1), w = prof([[0, 0.034], [0.12, 0.047], [0.45, 0.046], [0.7, 0.053], [0.92, 0.045], [1, 0.022]], s);
@@ -607,7 +608,7 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
       const at = (h: number) => madd(madd(back, d, s * L), up, base + h + spring);
       outRings.push({ c: at(0.003), u: up, w: side, r: () => [0.003, w + 0.006] });
       soleRings.push({ c: at(0.006 + th / 2), u: up, w: side, r: () => [th / 2, w + 0.005] });
-      const ht = prof([[0, 0.078], [0.1, 0.09], [0.2, 0.08], [0.42, 0.07], [0.72, 0.05], [0.93, 0.036], [1, 0.024]], s);
+      const ht = prof([[0, 0.072], [0.08, 0.082], [0.2, 0.072], [0.36, 0.066], [0.55, 0.056], [0.75, 0.044], [0.93, 0.033], [1, 0.022]], s);
       upperRings.push({ c: at(0.006 + th + ht / 2 - 0.004), u: up, w: side, r: (a) => [ht / 2, w * (Math.cos(a) < 0 ? 1 : 0.9)] });
     }
     loft(m, outRings, { seg: 14, col: () => COL.outsole, mat: () => MAT.rubber, capA: true, capB: true, weights: () => [[bone, 1]] });

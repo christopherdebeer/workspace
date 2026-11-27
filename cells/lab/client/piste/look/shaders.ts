@@ -201,7 +201,7 @@ void main(){
     // the relief: a twill's diagonal ribs (about 1.4 mm apart, as a heavy drill's), faded out where finer than a pixel;
     // and each seam a raised welt, its stitches pressed in
     vec2 tq = vT * 720.0; float tseen = 1.0 - smoothstep(0.3, 0.75, fwidth(tq.x + tq.y));
-    float rib = sin((tq.x + tq.y) * 3.1416) * 0.00022 * tseen;
+    float rib = sin((tq.x + tq.y) * 3.1416 + 0.8 * vnoise(tq * 0.05)) * 0.00011 * tseen;
     // (the weave's coarser grain, the cotton's slubs: a few millimetres, seen where the ribs aren't)
     vec2 sq = vT * vec2(160.0, 260.0); float sseen = 1.0 - smoothstep(0.35, 0.9, max(fwidth(sq.x), fwidth(sq.y)));
     float slub = (vnoise(sq) - 0.5) * 0.00035 * sseen;
@@ -210,13 +210,14 @@ void main(){
     vec2 cq = vec2(vT.x * 11.0 + 0.6 * vnoise(vT * 7.0), vT.y * 34.0 + 1.4 * vnoise(vT * 5.0 + 3.0));
     float ridge = 1.0 - abs(vnoise(cq) * 2.0 - 1.0), patchy = smoothstep(0.35, 0.8, vnoise(vT * vec2(4.0, 6.0) + 9.0));
     float crease = ridge * ridge * patchy * 0.0016;
-    float welt = 0.0011 * (1.0 - smoothstep(0.0, 0.007, seamD)) * (1.0 - 0.4 * step(0.6, fract(vT.y * 110.0)));
+    float welt = 0.0007 * (1.0 - smoothstep(0.0, 0.006, seamD)) * (1.0 - 0.3 * step(0.6, fract(vT.y * 110.0)));
     N = bump(N, rib + slub + crease + welt);
     // (a crease's valley a little shut in, its ridge a little lit: the light alone doesn't make it read at a distance)
     alb *= 1.0 - 0.08 * patchy * (1.0 - ridge);
     // the seam: a narrow darker line, stitched
-    float sl = (1.0 - smoothstep(0.0018, 0.0045, seamD)), st = step(0.5, fract(vT.y * 110.0));
-    alb *= 1.0 - sl * (0.10 + 0.055 * st);
+    // (a fine line, faint: a seam reads by its welt catching the light more than by its colour)
+    float sl = (1.0 - smoothstep(0.0007, 0.002, seamD)), st = step(0.5, fract(vT.y * 110.0));
+    alb *= 1.0 - sl * (0.05 + 0.025 * st);
     // folds and contact: darker and cooler where it's shut in
     alb *= shade; alb = mix(alb * vec3(0.86, 0.9, 1.04), alb, shade);
     if (vAtlas.x >= 0.5) {
