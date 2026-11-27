@@ -27,6 +27,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'penny', title: 'Penny Vision', group: 'Perception', tags: ['hci'],
+    blurb: 'Virtual reality for small change. Three engraved optical plates in red and cyan. Turn the specimen, rack the focus, and watch the two impressions register.',
+    page: 'static/penny.html', preview: 'preview', readme: 'static/penny.md',
+    presets: [{ label: 'Armillary', query: 'plate=armillary' }, { label: 'Volute', query: 'plate=volute' }],
+  },
+  {
     id: 'piste', title: 'Piste', group: 'Play', tags: ['hci'],
     blurb: 'A fencing bout seen through your own mask, with two thumbs. Nothing in it is animated: the épée is a flexible blade solved in two-thousandths of a second (a tapered beam with its set, held by a hand of two heavy points pulled by muscles that can only push so hard), so a beat on the foible moves it and a beat on the forte doesn\'t, a bind slides, a point pressed home bends the blade into an arc. The tip is a button: it has to be pushed along its axis with 750 g for a couple of milliseconds to light the lamp, and the box gives the other fencer 45 ms to answer. The left thumb is the body (push up to extend, further to lunge; tap to advance; down to retreat), the right thumb the hand (across to parry, up and down for the point). Fourteen lessons teach it in the order a fencer learns: distance, the straight arm, the lunge, the advance-lunge, the parries in quarte, sixte, septime and octave with their ripostes, the stop-hit, the point in line, the beat attack, the disengage, the one-two, second intention. A coach sets each one up, a judge reads the bout (was the arm first? where did the parry meet?), and the pace speeds up as you get it right. Against an opponent, bullet time slows the moments that decide a touch, less at each level, and every touch is replayed slowly from the side. An arm held out tires in seconds; the opponent goes for whatever your bell leaves open, won\'t walk onto your point in line, and beats a tired one. Three minutes on the clock, then a priority minute.',
     page: 'static/piste.html', preview: 'preview&seed=2&t=2', readme: 'static/piste.md',

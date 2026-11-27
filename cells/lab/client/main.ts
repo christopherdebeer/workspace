@@ -41,6 +41,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   drawer: () => import('./drawer/main'),
   roofjumps: () => import('./roofjumps/main'),
   volley: () => import('./volley/main'),
+  penny: () => import('./penny/main'),
   piste: () => import('./piste/main'),
 };
 
