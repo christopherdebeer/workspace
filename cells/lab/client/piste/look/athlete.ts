@@ -396,6 +396,18 @@ export function buildAthlete(o: { draft?: Draft } = {}): Athlete {
   const holes = [armhole(f.shoulder, f.elbow), armhole(c[7].a, c[7].b)];
   SEAMS.length = 0;
   holes.forEach((h, k) => SEAMS.push({ what: k ? 'rear armhole' : 'weapon armhole', rows: h.rows, cols: h.cols, heights: h.rows.map((i) => torsoP[i][0][1] - hy) }));
+  // One continuous torso binding for the loft, the drafted panels and both sleeve caps.
+  const torsoWeights = (p: V): W => {
+    const h = p[1] - hy, k = blend(h, 0.18, 0.4);
+    const w: W = [[B.pelvis, 1 - k], [B.chest, k]];
+    // (near each shoulder the jacket takes a share of that arm: reaching, the arm draws it across the chest)
+    for (const [sh, bone] of [[f.shoulder, B.upperW], [c[7].a, B.upperR]] as const) {
+      // (the same share the sleeve's cap gives the chest where they meet, so jacket and sleeve move as one garment there)
+      const d = len(sub(p, sh)), s = Math.max(0, 1 - d / 0.2) * 0.6;
+      if (s > 0) { for (const e of w) e[1] *= 1 - s; w.push([bone, s]); }
+    }
+    return w;
+  };
   const torso = loft(m, torsoRings, {
     // (no hole: the sleeve's first ring lies on the jacket's surface, just proud of it, the jacket going on under it,
     // so there's nothing to see into from any angle)
@@ -406,17 +418,7 @@ export function buildAthlete(o: { draft?: Draft } = {}): Athlete {
         - 0.009*pleat(row,0.39+0.10*Math.cos(a),0.045));
     } },
     cloth: { kind: 'jacket', pins: [] }, fit: fitShoulder, panel: 0, seg: TS, col: white, mat: fab, tone: TONE.jacket, seams: [0.25, 0.75], capB: true,
-    weights: (i, j, p) => {
-      const h = p[1] - hy, k = blend(h, 0.18, 0.4);
-      const w: W = [[B.pelvis, 1 - k], [B.chest, k]];
-      // (near each shoulder the jacket takes a share of that arm: reaching, the arm draws it across the chest)
-      for (const [sh, bone] of [[f.shoulder, B.upperW], [c[7].a, B.upperR]] as const) {
-        // (the same share the sleeve's cap gives the chest where they meet, so jacket and sleeve move as one garment there)
-        const d = len(sub(p, sh)), s = Math.max(0, 1 - d / 0.2) * 0.6;
-        if (s > 0) { for (const e of w) e[1] *= 1 - s; w.push([bone, s]); }
-      }
-      return w;
-    },
+    weights: (_i, _j, p) => torsoWeights(p),
     extra: (i, j, p) => [Math.max(0, 1 - (p[1] - hy + 0.09) / 0.14), 0, 0, PART.torso],
   });
   // (the jacket's cloth held to the skin round each armhole, where a sleeve is sewn on, and inside it, where nothing shows)
@@ -730,39 +732,57 @@ export function buildAthlete(o: { draft?: Draft } = {}): Athlete {
   }
 
   bakeContactShade(m);
-  if (o.draft) return dressIn(m, o.draft, bind);
+  if (o.draft) return dressIn(m, o.draft, bind, torsoWeights);
   return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: m.pieces };
 }
 
 /**
  * The athlete in a drafted garment instead of its own jacket and sleeves: theirs taken out, the draft's pieces put in. A
- * drafted point follows the body as the nearest point of the jacket it replaces did (its joints and weights); the cloth
+ * drafted point follows its own panel and the arm inside its sleeve; the cloth
  * simulation takes them as flat pieces, sewn at their seams (look/cloth.ts).
  */
-function dressIn(m: SkinMesh, D: Draft, bind: Frame[]): Athlete {
+function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W): Athlete {
   const old = m.pieces.filter((p) => p.kind !== 'breeches'), gone = new Uint8Array(m.n);
   for (const p of old) gone.fill(1, p.base, p.base + p.R * p.J);
-  const oldIds: number[] = []; for (let i = 0; i < m.n; i++) if (gone[i]) oldIds.push(i);
   const index: number[] = [];
   for (let i = 0; i < m.i.length; i += 3) if (!gone[m.i[i]] && !gone[m.i[i + 1]] && !gone[m.i[i + 2]]) index.push(m.i[i], m.i[i + 1], m.i[i + 2]);
   const at = (i: number): V => [D.x[i * 3], D.x[i * 3 + 1], D.x[i * 3 + 2]], n = D.x.length / 3, base = m.n;
   // (normals from its triangles, as settled)
   const N = Array.from({ length: n }, () => [0, 0, 0] as V);
   for (let t = 0; t < D.tris.length; t += 3) { const [a, b, c] = [D.tris[t], D.tris[t + 1], D.tris[t + 2]], nr = cross(sub(at(b), at(a)), sub(at(c), at(a))); for (const k of [a, b, c]) for (let j = 0; j < 3; j++) N[k][j] += nr[j]; }
-  const pieceOf = (i: number) => D.pieces.find((p) => i >= p.base && i < p.base + p.rows * p.cols)!;
-  for (let i = 0; i < n; i++) {
-    const p = at(i);
-    let best = oldIds[0], bd = Infinity; for (const j of oldIds) { const v = j * SKIN_STRIDE, d = (m.v[v] - p[0]) ** 2 + (m.v[v + 1] - p[1]) ** 2 + (m.v[v + 2] - p[2]) ** 2; if (d < bd) { bd = d; best = j; } }
-    const v = best * SKIN_STRIDE, w: W = [0, 1, 2, 3].map((k) => [m.v[v + 12 + k], m.v[v + 16 + k]] as [number, number]).filter((e) => e[1] > 0);
-    const pc = pieceOf(i), row = Math.floor((i - pc.base) / pc.cols) / (pc.rows - 1);
-    // (what the eye inside the mask doesn't see of its own body: the jacket, the rear sleeve, the top of its own sleeve)
-    const part = pc.kind === 'jacket' ? PART.torso : pc.kind === 'sleeveR' ? PART.rearArm : row < 0.4 ? PART.upperSleeve : PART.always;
-    m.vert(p, norm(N[i]), [0.95, D.seam[i], TONE.jacket], MAT.fabric, [D.uv[i * 2], D.uv[i * 2 + 1]], w, [0, 0, 0, part]);
+  const pieces = m.pieces.filter((p) => p.kind === 'breeches');
+  for (const pc of D.pieces) {
+    const weaponArm = pc.kind === 'sleeveW', upper = weaponArm ? B.upperW : B.upperR, fore = weaponArm ? B.foreW : B.foreR;
+    let elbowRow = 0;
+    if (pc.kind !== 'jacket') {
+      const elbow = bind[fore].o, cuff: V = [0, 0, 0], last = pc.base + (pc.rows - 1) * pc.cols;
+      for (let c = 0; c < pc.cols - 1; c++) {
+        const point = at(last + c);
+        for (let axis = 0; axis < 3; axis++) cuff[axis] += point[axis] / (pc.cols - 1);
+      }
+      const upperLength = len(sub(elbow, bind[upper].o));
+      elbowRow = upperLength / (upperLength + len(sub(cuff, elbow)));
+    }
+    for (let k = 0; k < pc.rows * pc.cols; k++) {
+      const i = pc.base + k, p = at(i), row = Math.floor(k / pc.cols) / (pc.rows - 1);
+      let w = torsoWeights(p);
+      if (pc.kind !== 'jacket') {
+        // Cap and armhole share the torso field. Down the sleeve every column
+        // crosses the same elbow, even when the bent forearm lies against the ribs.
+        const arm = smooth(blend(row, 0, 0.23)), bend = smooth(blend(row, elbowRow - 0.17, elbowRow + 0.17));
+        const weights = new Map(w.map(([bone, v]) => [bone, v * (1 - arm)]));
+        weights.set(upper, (weights.get(upper) ?? 0) + arm * (1 - bend));
+        weights.set(fore, arm * bend);
+        w = [...weights].filter(([, v]) => v > 0);
+      }
+      // (what the eye inside the mask doesn't see of its own body: the jacket, the rear sleeve, the top of its own sleeve)
+      const part = pc.kind === 'jacket' ? PART.torso : pc.kind === 'sleeveR' ? PART.rearArm : row < 0.4 ? PART.upperSleeve : PART.always;
+      m.vert(p, norm(N[i]), [0.95, D.seam[i], TONE.jacket], MAT.fabric, [D.uv[i * 2], D.uv[i * 2 + 1]], w, [0, 0, 0, part]);
+    }
+    pieces.push({ kind: pc.kind, base: base + pc.base, R: pc.rows, J: pc.cols, closed: false, joint: pc.kind === 'jacket' ? undefined : elbowRow,
+      flat: Array.from({ length: pc.rows * pc.cols }, (_, k) => [D.flat[(pc.base + k) * 2], D.flat[(pc.base + k) * 2 + 1]] as [number, number]) });
   }
   for (const t of D.tris) index.push(base + t);
-  const pieces: ClothPiece[] = m.pieces.filter((p) => p.kind === 'breeches');
-  for (const p of D.pieces) pieces.push({ kind: p.kind, base: base + p.base, R: p.rows, J: p.cols, closed: false, joint: p.kind === 'jacket' ? undefined : 0.55,
-    flat: Array.from({ length: p.rows * p.cols }, (_, k) => [D.flat[(p.base + k) * 2], D.flat[(p.base + k) * 2 + 1]] as [number, number]) });
   const seams = D.seams.map(([a, b]) => [base + a, base + b] as [number, number]);
   const stitches = (D.stitches ?? []).map(([p, q, q2, t]) => [base + p, base + q, base + q2, t] as [number, number, number, number]);
   return { verts: Float32Array.from(m.v), index: Uint32Array.from(index), bind, count: index.length, pieces, seams, stitches };

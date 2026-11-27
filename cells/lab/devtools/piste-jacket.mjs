@@ -175,7 +175,13 @@ writeFileSync(new URL('../client/piste/look/jacket-pattern.json', import.meta.ur
     stitches.push([p, qa, qb, Math.round((wb / (wa + wb)) * 1000) / 1000]);
   }
   console.log('turned right way out:', flipped.join(', ') || 'none');
-  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(S.x, r3), tris, uv, seam, pieces, flat, seams, stitches }));
+  // Export the same closed seams that the live cloth shader draws. This also
+  // gives the posed fallback and the solver's initial anchors a sewn bind pose.
+  const sewnX = S.x.slice();
+  for (const [p, a, b, t] of stitches) for (let k = 0; k < 3; k++) {
+    sewnX[3 * p + k] = S.x[3 * a + k] * (1 - t) + S.x[3 * b + k] * t;
+  }
+  writeFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), JSON.stringify({ x: Array.from(sewnX, r3), tris, uv, seam, pieces, flat, seams, stitches }));
 }
 const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
 const pointStrain = new Float64Array(G.n); S.edges.forEach((e, k) => { if (e.dir === 'across' || e.dir === 'along') { pointStrain[e.a] = Math.max(pointStrain[e.a], strain[k]); pointStrain[e.b] = Math.max(pointStrain[e.b], strain[k]); } });

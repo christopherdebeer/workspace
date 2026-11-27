@@ -18,7 +18,7 @@
  * set in), the collar, the closure offset to the side away from the weapon arm, darts.
  */
 import type { Capsule } from '../fencer';
-import { type V, add, cross, dot, len, madd, norm, scale, sub } from '../v3';
+import { type V, add, cross, dot, len, lerp, madd, norm, scale, sub } from '../v3';
 
 export type Quarter = 'FW' | 'FR' | 'BW' | 'BR';
 export const QUARTERS: Quarter[] = ['FW', 'FR', 'BW', 'BR'];
@@ -206,20 +206,29 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     // (laid along a smooth curve through the elbow, not the arm's kink: rings on a kinked line cross on the inside of the
     // bend and lay the cloth there inside out)
     const segs = [len(sub(arm[1], arm[0])), len(sub(arm[2], arm[1]))], total = segs[0] + segs[1];
-    const bez = (u: number): V => add(add(scale(arm[0], (1 - u) ** 2), scale(arm[1], 2 * u * (1 - u))), scale(arm[2], u * u));
-    const N2 = 200, bp = Array.from({ length: N2 + 1 }, (_, k) => bez(k / N2)), bl = [0]; for (let k = 1; k <= N2; k++) bl.push(bl[k - 1] + len(sub(bp[k], bp[k - 1])));
+    const upper = norm(sub(arm[1], arm[0])), lower = norm(sub(arm[2], arm[1]));
+    const radius = Math.min(0.09, segs[0] / 3, segs[1] / 3);
+    const entry = madd(arm[1], upper, -radius), exit = madd(arm[1], lower, radius);
     const along = (t: number): [V, V] => {
-      const d = t * bl[N2]; let k = 0; while (k < N2 - 1 && bl[k + 1] < d) k++;
-      return [bp[k], norm(sub(bp[Math.min(N2, k + 1)], bp[k]))];
+      const d = t * total - segs[0];
+      if (d <= -radius) return [madd(arm[1], upper, d), upper];
+      if (d >= radius) return [madd(arm[1], lower, d), lower];
+      const u = (d + radius) / (2 * radius);
+      return [lerp(lerp(entry, arm[1], u), lerp(arm[1], exit, u), u), norm(lerp(upper, lower, u))];
     };
+    // Transport the underarm direction around the bend. Re-projecting a
+    // torso-facing vector at every ring can flip the tube across the forearm.
+    const inward = sub([B.pelvis[0], arm[0][1], B.pelvis[2]], arm[0]);
+    const under = norm(sub(inward, scale(upper, dot(inward, upper))));
+    const winding = dot(cross(upper, under), B.r) < 0 ? 1 : -1;
     const piece: Piece = { name: `sleeve ${s}`, rows: SROWS, cols: SCOLS, flat: [], at: [], base: n, kind: 'sleeve', side: s };
     for (let r = 0; r < SROWS; r++) {
       const t = r / (SROWS - 1), rnd = interp(S.stations, round, t), [p, d] = along(t * Math.min(1, S.length / total));
       // (laid with its underarm seam (column 0) toward the armpit and its first quarter facing the jacket's front, which
       // is the way it's sewn: the notches, not a guess from where it lies)
-      // (the underarm seam toward the body: measured from the arm toward the trunk's axis, which is never along the arm (a
-      // hanging arm's "down" is, and flips the rings from one to the next: a twist))
-      const toBody = sub([B.pelvis[0], p[1], B.pelvis[2]], p), down = norm(sub(toBody, scale(d, dot(toBody, d)))), frontDir = norm(sub(scale(B.r, -1), scale(d, -dot(B.r, d)))), side2 = norm(sub(frontDir, scale(down, dot(frontDir, down))));
+      const turn = cross(upper, d);
+      const down = norm(add(add(under, cross(turn, under)), scale(cross(turn, cross(turn, under)), 1 / Math.max(1e-6, 1 + dot(upper, d)))));
+      const side2 = scale(cross(d, down), winding);
       for (let c = 0; c < SCOLS; c++) {
         // (the cap's crown carried down into the first rows, fading out where the sleeve is a plain tube)
         const fade = 1 - Math.min(1, (t * S.length) / Math.max(0.04, capH * 1.6));
@@ -250,6 +259,17 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       void nearFront;
       let k = 0; while (k < L.length - 2 && L[k + 1] < want) k++;
       stitches.push({ p: n + c, q: loop[k], q2: loop[k + 1], t: (want - L[k]) / Math.max(1e-9, L[k + 1] - L[k]), seam: `sleeve cap ${s}` });
+      // Lay the cap directly in its armhole before fitting. Each column
+      // blends from its own notch into the sleeve over the first few rows.
+      const st = stitches[stitches.length - 1], edge = lerp(atAll[st.q], atAll[st.q2], st.t);
+      const shift = sub(edge, piece.at[c]);
+      for (let r = 0; r < SROWS; r++) {
+        const u = Math.min(1, (r / (SROWS - 1)) / 0.25), w = 1 - u * u * (3 - 2 * u);
+        const i = r * SCOLS + c;
+        piece.at[i] = atAll[n + i] = madd(piece.at[i], shift, w);
+        if (c === 0) piece.at[i + SCOLS - 1] = atAll[n + i + SCOLS - 1] = piece.at[i];
+      }
+
     }
     n += SROWS * SCOLS;
   }
