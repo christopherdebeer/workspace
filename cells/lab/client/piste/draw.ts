@@ -260,8 +260,8 @@ export class Renderer {
       if (this.cloth) this.cloth.stress = Math.max(1, Math.min(16, Math.round(this.clothStress)));
       for (const [pass, U] of [[this.skin, this.uk], [this.skinShade, this.uks]] as const) {
         gl.useProgram(pass);
-        for (const k of ['clothX', 'clothSeam', 'clothOn', 'clothW', 'clothPiece']) U[k] = gl.getUniformLocation(pass, k);
-        gl.uniform1i(U.clothX, 2); gl.uniform1i(U.clothSeam, 3); gl.uniform1i(U.clothOn, 0);
+        for (const k of ['clothX', 'clothSeam', 'clothRest', 'clothOn', 'clothW', 'clothPiece']) U[k] = gl.getUniformLocation(pass, k);
+        gl.uniform1i(U.clothX, 2); gl.uniform1i(U.clothSeam, 3); gl.uniform1i(U.clothRest, 4); gl.uniform1i(U.clothOn, 0);
         if (this.cloth) { gl.uniform1i(U.clothW, this.cloth.W); gl.uniform4iv(U.clothPiece, this.cloth.pieces); }
       }
     }
@@ -303,7 +303,7 @@ export class Renderer {
     if (!this.clothShaders) return;
     const gl = this.gl, x = this.cloth?.points(f) ?? null;
     gl.uniform1i(u.clothOn, x ? 1 : 0);
-    if (x) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, x); gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.cloth!.seams); gl.activeTexture(gl.TEXTURE0); }
+    if (x) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, x); gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.cloth!.seams); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.cloth!.rests); gl.activeTexture(gl.TEXTURE0); }
   }
 
   private clothUniforms(u: Record<string,WebGLUniformLocation|null>, p: ReturnType<Renderer['pose']>) {

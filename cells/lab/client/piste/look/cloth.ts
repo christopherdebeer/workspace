@@ -202,7 +202,7 @@ void main(){
 
 /** what the skinning shaders need to draw the cloth's points in place of the skinned ones */
 const DRAW_GLSL = `
-uniform highp sampler2D clothX, clothSeam; uniform int clothOn, clothW; uniform ivec4 clothPiece[16];
+uniform highp sampler2D clothX, clothSeam, clothRest; uniform int clothOn, clothW; uniform ivec4 clothPiece[16];
 vec3 clothTx(int i){ return texelFetch(clothX, ivec2(i % clothW, i / clothW), 0).xyz; }
 vec3 clothPt(int off, int S, int r, int c){ return clothTx(off + r * S + c); }
 void clothAt(inout vec3 q, inout vec3 nn){
@@ -219,6 +219,10 @@ void clothAt(inout vec3 q, inout vec3 nn){
     int cR = open ? min(c + 1, S - 1) : (c + 1) % S, cL = open ? max(c - 1, 0) : (c + S - 1) % S;
     vec3 du = clothPt(P.w, S, r, cR) - clothPt(P.w, S, r, cL);
     vec3 dv = clothPt(P.w, S, min(r + 1, P.y - 1), c) - clothPt(P.w, S, max(r - 1, 0), c);
+    // (how stretched the cloth is here, across and along: its lengths now against the pattern's (its rest lengths:
+    // up, down, right, left), for the creases (shaders.ts): bunched, they deepen; taut, they flatten)
+    vec4 rl = texelFetch(clothRest, ivec2(ti % clothW, ti / clothW), 0);
+    clothStrain = vec2(length(du) / max(1e-5, rl.z + rl.w), length(dv) / max(1e-5, rl.x + rl.y));
     vec3 m = cross(dv, du);
     if (dot(m, m) > 1e-14) { m = normalize(m); nn = dot(m, nn) < 0.0 ? -m : m; }
     return;
@@ -343,6 +347,8 @@ export class GpuCloth {
   points(f: object): WebGLTexture | null { return this.states.get(f)?.x ?? null; }
   /** the welded seams (each sewn point's place on the edge it's sewn to), for drawing */
   get seams(): WebGLTexture { return this.stat.seam; }
+  /** the pattern's lengths (each point's to its neighbours), for drawing the creases by how stretched the cloth is */
+  get rests(): WebGLTexture { return this.stat.rest0; }
 
   /** run `f`'s cloth on to bout time `t`, its skin posed by `bones` (the renderer's skinning matrices), its arms
    * `arms` (four capsules: a.xyz and radius each, then b.xyz and 0 each) */
