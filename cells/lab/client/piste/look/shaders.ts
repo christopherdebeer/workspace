@@ -97,6 +97,22 @@ float shadowAt(){
   for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += texture(shadow, vec3(q.xy + vec2(i, j) * px * 1.3, q.z - b));
   return s / 9.0;
 }
+// the window's light is a broad source (the bank of panes, beside the sun's way): its shadow soft, sampled wide
+float windowShadow(){
+  vec3 q = vL.xyz / vL.w * 0.5 + 0.5;
+  if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0 || q.z > 1.0) return 1.0;
+  float s = 0.0, px = 1.0 / 2048.0;
+  for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) s += texture(shadow, vec3(q.xy + vec2(i, j) * px * 4.5, q.z - 0.004));
+  return s / 25.0;
+}
+// a surface's fine relief, as a height (m) over its own coordinates: tilt the normal by its slope, from the pixel's
+// own derivatives (no tangents needed: Mikkelsen's bump mapping)
+vec3 bump(vec3 N, float h){
+  vec3 dpx = dFdx(vP), dpy = dFdy(vP); float hx = dFdx(h), hy = dFdy(h);
+  vec3 r1 = cross(dpy, N), r2 = cross(N, dpx); float det = dot(dpx, r1);
+  if (abs(det) < 1e-14) return N;
+  return normalize(abs(det) * N - sign(det) * (hx * r1 + hy * r2));
+}
 // soft contact: the floor darkened under each shoe and under each tip (the nearer the tip to the floor, the darker)
 float contact(vec3 p){
   float k = 1.0;
@@ -181,6 +197,12 @@ void main(){
     float seen = clamp(1.0 - max(fw.x, fw.y) * 0.9, 0.0, 1.0);
     float weave = sin(q.x * 6.2832) * sin(q.y * 6.2832) * 0.5 + sin((q.x + q.y) * 3.1416) * 0.5;
     alb *= 1.0 + 0.07 * weave * seen;
+    // the relief: a twill's diagonal ribs (about 1.4 mm apart, as a heavy drill's), faded out where finer than a pixel;
+    // and each seam a raised welt, its stitches pressed in
+    vec2 tq = vT * 720.0; float tseen = clamp(1.0 - max(fwidth(tq.x + tq.y), 0.0) * 0.8, 0.0, 1.0);
+    float rib = sin((tq.x + tq.y) * 3.1416) * 0.00009 * tseen;
+    float welt = 0.0007 * (1.0 - smoothstep(0.0, 0.0065, seamD)) * (1.0 - 0.35 * step(0.6, fract(vT.y * 110.0)));
+    N = bump(N, rib + welt);
     // the seam: a narrow darker line, stitched
     float sl = (1.0 - smoothstep(0.0018, 0.0045, seamD)), st = step(0.5, fract(vT.y * 110.0));
     alb *= 1.0 - sl * (0.10 + 0.055 * st);
@@ -227,11 +249,20 @@ void main(){
     // light: the sun through the panes (and not shadowed), the day from the window side, the lamps, a warm bounce
     float sun = sunThrough(vP) * shadowAt();
     float nl = max(dot(N, sunDir), 0.0);
-    vec3 winDir = normalize(vec3(-0.26, 0.58, -0.9));
+    // (the window bank beside the piste: for a figure standing in the room its light comes mostly from the side)
+    vec3 winDir = normalize(vec3(-0.2, 0.38, -0.92));
     float fall = 1.0 / (1.0 + 0.16 * (vP.z - LO.z));
-    vec3 day = SKY * (0.075 + 1.36 * max(dot(N, winDir), 0.0)) * fall;
-    vec3 amb = mix(vec3(0.041, 0.039, 0.034), vec3(0.13, 0.15, 0.17), N.y * 0.5 + 0.5);
-    vec3 lamps = vec3(0.14,0.15,0.14) * max(N.y, 0.0) + vec3(0.085, 0.075, 0.060) * max(-N.y, 0.0);
+    // (the window's light shadowed, softly: an arm across the chest, the far side of a fold; cloth lets it wrap a little
+    // further round, as a soft weave does)
+    // (the bank of panes along the wall, not one: the panes up and down the room light a face turned along the piste
+    // obliquely, as the nearer windows light a fencer's front in the look's targets)
+    float wrap = (M == 15) ? 0.12 : 0.0, wl = 0.0;
+    for (int k = -2; k <= 2; k++) { vec3 wd = normalize(vec3(float(k) * 0.42, 0.38, -0.92)); wl += max((dot(N, wd) + wrap) / (1.0 + wrap), 0.0) * 0.2; }
+    wl *= 1.15;
+    float ws = (M == 3 || M == 4 || M == 10 || M == 15 || M == 0 || M == 13 || M == 14 || M == 7 || M == 16 || M == 8 || M == 9) ? mix(0.28, 1.0, windowShadow()) : 1.0;
+    vec3 day = SKY * (0.035 + 1.8 * wl * ws) * fall;
+    vec3 amb = mix(vec3(0.02, 0.019, 0.017), vec3(0.065, 0.075, 0.085), N.y * 0.5 + 0.5);
+    vec3 lamps = vec3(0.06,0.063,0.06) * max(N.y, 0.0) + vec3(0.05, 0.044, 0.036) * max(-N.y, 0.0);
     float ao = (M == 3 || M == 4 || M == 10) ? contact(vP) : 1.0;
     vec3 light = (SUN * nl * sun + day + amb + lamps) * ao;
     vec3 R = reflect(-V, N);

@@ -113,6 +113,8 @@ if (lesson) thumbs.allow = { ...lesson.controls };
 // (`fabric=old`: the kit in the lighter, stiffer cloth the dials were first set for, to compare)
 if (qs.get('fabric') === 'old') useFabric(OLD_FABRIC);
 const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
+// (`exposure=0.8`: the camera's exposure, for judging the light)
+if (qs.has('exposure')) renderer.exposure = Number(qs.get('exposure')) || renderer.exposure;
 // (the fencers wear the jacket drafted and settled by devtools/piste-jacket.mjs; `jacket=loft`: the lofted one it replaced)
 // (dressed before anything runs, so a still's cloth has the same history in either jacket)
 const dressed: Promise<void> = (() => {
