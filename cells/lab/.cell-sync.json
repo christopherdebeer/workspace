@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:6e5894189795de1b3a0406898127fa383f421edad132f724103a2345c89cc606",
-  "syncedAt": "2026-11-27T09:32:15.851Z",
+  "treeVersion": "tree:6ebc342af7aada3526640e9b6c6f8915624562416d3882275cac7bbff4155269",
+  "syncedAt": "2026-11-27T10:31:46.472Z",
   "files": {
     "README.md": "sha256:0bf552fbd99c966b00484b4d831c42db1b25a8420e2332a20e39db53d4747e0b",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -265,8 +265,10 @@
     "client/mistwood/tree.ts": "sha256:979c153ce9d99ab3fbac0c329c859f3669accd8083c1122358887ad18e793a78",
     "client/mistwood/tune.ts": "sha256:77dbd68d431462dd5dabfe304f92ffc5f954c51bc69999b69a392c1a5ca1d4f3",
     "client/mistwood/world.ts": "sha256:1886064c7e296ab61301fee42f10b5911d4a8301cd02672150bf00b42d07b266",
-    "client/penny/main.ts": "sha256:a13b004ad0bb7d73690d60585976a69b4a171f7f8d3f649a1f72082c233a7c61",
+    "client/penny/ads.ts": "sha256:c0288f6451ffabd8332a13e5cd590104fba045140d5915318028af178922c08b",
+    "client/penny/main.ts": "sha256:c763ce6f0de51089ec8f9f4b1358d173129d14413a35a0bd7e038d6a6a601040",
     "client/penny/proof.ts": "sha256:08d88a6a4c528588a855c46074bea5ebe6797da9e3b27adcfd7d5b73cdcdb57e",
+    "client/penny/spatial.ts": "sha256:54f3f1512f2efb84943601f6f43fee69199a90400f0bdb3af5fe1a2c5785da29",
     "client/piste/ai.ts": "sha256:7f54a86b121203259b492a2bee67854b3084de89098dbbacbf4eb2c298f0f9b8",
     "client/piste/blade.ts": "sha256:55310884fa3ce240bb73e09f0bf663c681fe1dd1e29b6ac54a082fd1b1d62f6b",
     "client/piste/bout.ts": "sha256:98f834df839353a76345f494988abcd5df105608d7b4f83926b00270db90cad1",

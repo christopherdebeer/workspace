@@ -132,5 +132,7 @@ function start(){
  canvas.onkeydown=e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();angle+=(e.key==='ArrowLeft'?-.1:.1);draw()}};
  mount();draw();new ResizeObserver(draw).observe(canvas);
 }
-try{start()}catch(e){document.querySelector('#error')!.textContent=e instanceof Error?e.message:'Viewer unavailable.'}
+import {startAds} from './ads';
+import {spatialPlates} from './spatial';
+try{if(query.has('ads'))startAds();else {const strip=document.querySelector<HTMLElement>('.strip')!;strip.style.gridTemplateColumns='repeat(auto-fit,minmax(90px,1fr))';for(const [i,title] of ['Classifieds','Third Dimension'].entries()){const b=document.createElement('button');b.innerHTML='<b>'+['IV','V'][i]+'</b> '+title;b.setAttribute('aria-pressed','false');b.onclick=()=>location.href=location.pathname+'?plate='+['classifieds','dimension'][i];strip.append(b)} const spatial=['classifieds','dimension'].indexOf(query.get('plate')||'');if(spatial>=0)spatialPlates(canvas,spatial);else start()}}catch(e){const error=document.querySelector('#error');if(error)error.textContent=e instanceof Error?e.message:'Viewer unavailable.';else console.error(e)}
 export {};
