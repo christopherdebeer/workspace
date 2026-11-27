@@ -1,5 +1,5 @@
 // Piste's undressed body (client/piste/look/body.ts), measured (node cells/lab/devtools/piste-body.mjs): its girths
-// against an adult man's, and how the drafted jacket (static/piste/jacket-draft.json, fitted on capsules) sits on it:
+// against an adult man's, and how the drafted jacket (static/piste/jacket-draft.json) sits on it:
 // how much of it is inside the body, and its ease (how far off the body it stands), by region.
 import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
@@ -29,7 +29,7 @@ for (let i = 0; i < D.x.length / 3; i++) {
   by.get(region).push(M.nearSurface(body, p).d);
 }
 const q = (a, t) => { const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(t * s.length))]; };
-console.log('\nthe drafted jacket (fitted on capsules) on this body: inside it, and its ease (cm: median, 90th percentile)');
+console.log('\nthe drafted jacket on this body: inside it, and its ease (cm: median, 90th percentile)');
 for (const [region, d] of [...by].sort()) {
   const inside = d.filter((x) => x < 0).length / d.length;
   console.log(`  ${region.padEnd(18)} inside ${(inside * 100).toFixed(0).padStart(3)} %   ease ${(q(d, 0.5) * 100).toFixed(1).padStart(5)} ${(q(d, 0.9) * 100).toFixed(1).padStart(5)}   deepest ${(Math.min(...d) * 100).toFixed(1)}`);
