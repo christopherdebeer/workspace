@@ -31,7 +31,7 @@ export const PART = { always: 0, head: 1, torso: 2, rearArm: 3, upperSleeve: 4 }
 
 export const TONE = { jacket: 0, breeches: 1, glove: 2, sock: 3 } as const;
 const COL = { skin: [0.55, 0.36, 0.27] as C, mesh: [0.11, 0.11, 0.115] as C, trim: [0.035, 0.035, 0.04] as C, padding: [0.09, 0.09, 0.1] as C,
-  shoe: [0.74, 0.74, 0.72] as C, sole: [0.04, 0.04, 0.045] as C, band: [0.06, 0.07, 0.1] as C };
+  shoe: [0.8, 0.8, 0.78] as C, sole: [0.86, 0.86, 0.83] as C, outsole: [0.2, 0.2, 0.21] as C, band: [0.06, 0.07, 0.12] as C };
 
 interface Frame { o: V; x: V; y: V; z: V }
 /** a bone's frame: origin, its axis, and a second axis from a reference direction */
@@ -553,11 +553,13 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
       // below the band to about 39 and narrows to the ankle. Measured by devtools/piste-proportions.mjs)
       // (the knee is found from in front by the kneecap standing out of a leg that's narrowest just above and below
       // it, not by the band's edge; the breeches gathered in under it to the band)
-      const r = tone === TONE.breeches ? prof([[0, 0.092], [0.12, 0.1], [0.3, 0.097], [sK - 0.1, 0.071], [sK - 0.03, 0.064], [sK + 0.015, 0.066], [band, 0.055]], s) : prof([[band, 0.054], [band + 0.04, 0.054], [sK + 0.17, 0.052], [0.8, 0.043], [1, 0.039]], s);
+      const r = tone === TONE.breeches ? prof([[0, 0.092], [0.12, 0.1], [0.3, 0.097], [sK - 0.1, 0.071], [sK - 0.03, 0.064], [sK + 0.015, 0.066], [band, 0.055]], s) : prof([[band - 0.03, 0.068], [band - 0.012, 0.067], [band + 0.02, 0.06], [band + 0.05, 0.058], [sK + 0.17, 0.056], [0.8, 0.047], [1, 0.042]], s);
       rings.push({ c: p, u, w, r: (a) => { const ca = Math.cos(a);
         const dr = tone === TONE.breeches ? (0.007 * pleat(s, sK-0.08+0.052*ca, 0.022)
           + 0.005 * pleat(s, sK-0.015-0.029*Math.sin(a), 0.017)
-          + 0.008 * pleat(s, 0.16+0.09*ca, 0.032)) : 0;
+          + 0.008 * pleat(s, 0.16+0.09*ca, 0.032))
+          // (the sock: thick, ribbed knit, a little slack at the shin: two soft rolls)
+          : 0.0011 * Math.cos(26 * a) + 0.0022 * pleat(s, 0.66 + 0.01 * ca, 0.018) + 0.0016 * pleat(s, 0.74 - 0.012 * ca, 0.016);
         // (the kneecap forward; the shin straight in front and the calf full behind it and, less, at either side, so its
         // curve shows from the side and from in front)
         const side = Math.abs(Math.sin(a));
@@ -578,39 +580,50 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
     // (the band kept over a drafted pair's hem: it's their knee band too)
     oldBreeches.push([leg0, m.n]);
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
-    for (let i = 0; i < 14; i++) { const s = band + (1 - band) * (i / 13); add1(s, TONE.sock); }
+    // (the sock pulled up over the band, as the look's targets wear it)
+    const sock0 = band - 0.03;
+    for (let i = 0; i < 30; i++) { const s = sock0 + (1 - sock0) * (i / 29); add1(s, TONE.sock); }
     const leg2 = rings.splice(0);
     // (the sock's foot end goes with the foot, inside the shoe's opening: turned out, the two turn together, no gap)
     const footBone = th === 9 ? B.footF : B.footB;
-    loft(m, leg2, { seg: 14, col: white, mat: fab, tone: TONE.sock, capB: true, weights: (i) => {
-      const s = band + (1 - band) * (i / 13), k = smooth(blend(s, 0.9, 1)), w = wts(s).map(([b, x]) => [b, x * (1 - k)] as [number, number]);
+    loft(m, leg2, { seg: 52, col: white, mat: fab, tone: TONE.sock, capB: true, weights: (i) => {
+      const s = sock0 + (1 - sock0) * (i / 29), k = smooth(blend(s, 0.9, 1)), w = wts(s).map(([b, x]) => [b, x * (1 - k)] as [number, number]);
       return k > 0 ? [...w, [footBone, k]] : w;
     } });
   };
   leg(9, 10, add(F.f, [0, 0.2, 0]));
   leg(11, 12, add(add(scale(F.f, -0.3), scale(F.r, -0.8)), [0, 0.2, 0]));
 
-  // ── shoes: a shaped sole pitched along the foot, the upper rounded over it, two bands each side ────────────────────
+  // ── shoes: white trainers, as the look's targets wear (devtools/refs/piste): a thick white midsole on a thin darker
+  // outsole, pitched along the foot, thicker at the heel, its toe sprung up a little; the upper rounded over it, high and
+  // padded at the heel's collar, low over the toes; two dark stripes crossing each side, rising toward the laces ────────
   const shoe = (k: number, bone: number) => {
-    const heel = c[k].a, toe = c[k].b, d = norm(sub(toe, heel)), side = norm(cross(up, d)), L = len(sub(toe, heel)) + 0.05;
-    const back = madd(heel, d, -0.03), base = -0.037;
-    // sole: a rounded outline, thicker at the heel, its toe sprung up a little
-    const soleRings: Ring[] = [], upperRings: Ring[] = [];
-    for (let i = 0; i < 12; i++) {
-      const s = i / 11, w = prof([[0, 0.032], [0.12, 0.045], [0.45, 0.044], [0.7, 0.05], [0.92, 0.042], [1, 0.02]], s);
-      const th = prof([[0, 0.022], [0.3, 0.02], [0.6, 0.012], [1, 0.01]], s), spring = s > 0.8 ? (s - 0.8) * 0.05 : 0;
-      const p = madd(madd(back, d, s * L), up, base + th / 2 + spring);
-      soleRings.push({ c: p, u: up, w: side, r: () => [th / 2, w + 0.004] });
-      const ht = prof([[0, 0.07], [0.15, 0.085], [0.42, 0.072], [0.72, 0.048], [0.93, 0.034], [1, 0.022]], s);
-      upperRings.push({ c: madd(madd(back, d, s * L), up, base + th + ht / 2 + spring), u: up, w: side, r: (a) => [ht / 2, w * (Math.cos(a) < 0 ? 1 : 0.92)] });
+    const heel = c[k].a, toe = c[k].b, d = norm(sub(toe, heel)), side = norm(cross(up, d)), L = len(sub(toe, heel)) + 0.06;
+    const back = madd(heel, d, -0.035), base = -0.04, NR = 24;
+    const outRings: Ring[] = [], soleRings: Ring[] = [], upperRings: Ring[] = [];
+    for (let i = 0; i < NR; i++) {
+      const s = i / (NR - 1), w = prof([[0, 0.034], [0.12, 0.047], [0.45, 0.046], [0.7, 0.053], [0.92, 0.045], [1, 0.022]], s);
+      const th = prof([[0, 0.034], [0.3, 0.031], [0.62, 0.021], [1, 0.016]], s), spring = s > 0.78 ? (s - 0.78) * 0.08 : 0;
+      const at = (h: number) => madd(madd(back, d, s * L), up, base + h + spring);
+      outRings.push({ c: at(0.003), u: up, w: side, r: () => [0.003, w + 0.006] });
+      soleRings.push({ c: at(0.006 + th / 2), u: up, w: side, r: () => [th / 2, w + 0.005] });
+      const ht = prof([[0, 0.078], [0.1, 0.09], [0.2, 0.08], [0.42, 0.07], [0.72, 0.05], [0.93, 0.036], [1, 0.024]], s);
+      upperRings.push({ c: at(0.006 + th + ht / 2 - 0.004), u: up, w: side, r: (a) => [ht / 2, w * (Math.cos(a) < 0 ? 1 : 0.9)] });
     }
-    loft(m, soleRings, { seg: 12, col: () => COL.sole, mat: () => MAT.rubber, capA: true, capB: true, weights: () => [[bone, 1]] });
-    loft(m, upperRings, { panel: 6, panelUV: (i,j) => [0.5 + 0.49*Math.sin(j/14 * Math.PI*2), i/11], seg: 14, col: (i, j) => { const a = (j / 14) * Math.PI * 2; return (i === 5 || i === 7) && Math.abs(Math.sin(a)) > 0.6 && Math.cos(a) < 0.3 ? COL.band : COL.shoe; }, mat: () => MAT.cloth, capA: true, capB: true, weights: () => [[bone, 1]] });
+    loft(m, outRings, { seg: 14, col: () => COL.outsole, mat: () => MAT.rubber, capA: true, capB: true, weights: () => [[bone, 1]] });
+    loft(m, soleRings, { seg: 16, col: () => COL.sole, mat: () => MAT.rubber, capA: true, capB: true, weights: () => [[bone, 1]] });
+    // (the stripes: on each flank, two bands climbing from the midsole forward to the laces)
+    const stripe = (i: number, j: number) => {
+      const s = i / (NR - 1), a = (j / 20) * Math.PI * 2, v = (Math.cos(a) + 1) / 2;
+      if (Math.abs(Math.sin(a)) < 0.5 || v > 0.85) return false;
+      return [0.36, 0.5].some((s0) => Math.abs(s - (s0 + 0.24 * v)) < 0.028);
+    };
+    loft(m, upperRings, { seg: 20, col: (i, j) => (stripe(i, j) ? COL.band : COL.shoe), mat: () => MAT.cloth, capA: true, capB: true, weights: () => [[bone, 1]] });
     for (let row = 0; row < 4; row++) for (const dir of [-1, 1]) {
       const route: V[] = [];
       for (let j = 0; j <= 6; j++) {
         const t = j / 6, across = dir * (2*t-1), s = 0.31 + row*0.072 + t*0.065;
-        const station = s*11, k = Math.floor(station), local = station-k;
+        const station = s*(upperRings.length - 1), k = Math.floor(station), local = station-k;
         const a = upperRings[k], b = upperRings[k+1], centre = lerp(a.c,b.c,local);
         const [ha,wa] = a.r(0), [hb,wb] = b.r(0);
         const z = across*0.63;
