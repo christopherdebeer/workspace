@@ -28,6 +28,9 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
   const isSleeve = new Uint8Array(n); G.pieces.forEach((pc) => { if (pc.kind === 'sleeve') isSleeve.fill(1, pc.base, pc.base + pc.rows * pc.cols); });
   // The fitting form supports sleeve rows along the bent arm. Constrain only
   // their centres: cloth can still slide round the arm and gather at the elbow.
+  // (provisional, and a crutch: without it the weapon sleeve's underarm sags against the ribs, where it's skinned mostly
+  // to the arm, and an extension pulls it 7 cm from its neighbours (devtools/piste-jacket-motion.mjs). The tailor's
+  // answer is an underarm gusset. The proof (look/proof.ts) settles free, without it)
   const rings: { start: number; cols: number; centre: V }[] = [];
   if (!o.free) for (const pc of G.pieces) {
     if (pc.kind !== 'sleeve') continue;

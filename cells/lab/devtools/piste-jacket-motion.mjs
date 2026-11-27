@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 const root = new URL('../client/piste/', import.meta.url).pathname;
 const out = await build({ stdin: { contents: "export * from './look/athlete'; export * from './bout'; export * from './weapons'; export * from './intent'; export * from './replay';", resolveDir: root, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { buildAthlete, boneFrames, skinMatrices, SKIN_STRIDE, BONES, Bout, EPEE, idle, cloneBout } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const { buildAthlete, boneFrames, skinMatrices, SKIN_STRIDE, BONES, B, Bout, EPEE, idle, cloneBout } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const draft = JSON.parse(readFileSync(new URL('../static/piste/jacket-draft.json', import.meta.url), 'utf8'));
 const athlete = buildAthlete({ draft });
 const panels = athlete.pieces.filter(p => !p.closed);
@@ -37,8 +37,8 @@ function checkPose(fencer) {
 }
 // Along each sleeve the cloth must progress from shoulder to elbow to cuff.
 for (const panel of panels.filter(p => p.kind.startsWith('sleeve'))) {
-  const fore = panel.kind === 'sleeveW' ? 4 : 7;
-  const elbow = athlete.bind[fore].o, wrist = athlete.bind[fore+1].o;
+  const fore = panel.kind === 'sleeveW' ? B.foreW : B.foreR;
+  const elbow = athlete.bind[fore].o, wrist = athlete.bind[panel.kind === 'sleeveW' ? B.handW : B.handR].o;
   const axis = wrist.map((v,k) => v-elbow[k]), length = Math.hypot(...axis);
   let furthest = -Infinity;
   for (let r = Math.ceil(panel.R * 0.55); r < panel.R; r++) {

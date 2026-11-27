@@ -38,7 +38,7 @@ export interface JacketPattern {
   /** the shoulder point: its distance from the centre, along the shoulder, m */
   shoulderW: number;
   /** each sleeve: its round at stations from the cap (0) to the cuff (1), its length, and the cap's ease into the armhole */
-  /** (bend: extra length along the sleeve's outside, through the elbow: a sleeve cut bent, as the weapon arm's is in guard) */
+  /** (bend: how much longer the sleeve's outside is than its inside, through the elbow: a sleeve cut bent, as the weapon arm's is in guard) */
   sleeves: Record<'W' | 'R', { stations: number[]; round: number[]; length: number; bend?: number }>;
   capEase: number;
   /** what's been done to it, in order */
@@ -91,7 +91,11 @@ export function draftJacket(B: Body): JacketPattern {
     // (over the shoulder: the trunk's depth there, front and behind, is climbed to the seam on top)
     lengths: (() => { const S = slice(B, B.shoulder[1] - 0.05), fr = S.radius(scale(B.r, -1)), bk = S.radius(B.r); return { FW: length + fr, FR: length + fr, BW: length + bk, BR: length + bk }; })(),
     armhole: (B.shoulder[1] - 0.15) - hem, drop: 0.045, neckW: 0.075, neckFront: 0.085, neckBack: 0.025,
-    shoulderW: 0.19, sleeves: { W: sleeve(B.armW), R: sleeve(B.armR) }, capEase: 0.04, moves: ['drafted from the body'],
+    shoulderW: 0.19,
+    // (the weapon sleeve cut bent, as a fencing jacket's is, for the arm in guard: a straight tube round a bent arm has
+    // the inside of the elbow's length to lose and folds over itself there. Its outside 16 cm longer than its inside, its
+    // middle half a centimetre short of the arm: the bend takes up the 2 cm a straight sleeve is given to move in)
+    sleeves: { W: { ...sleeve(B.armW), length: armLen(B.armW) - 0.005, bend: 0.16 }, R: sleeve(B.armR) }, capEase: 0.04, moves: ['drafted from the body'],
   };
 }
 
@@ -216,8 +220,8 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       const u = (d + radius) / (2 * radius);
       return [lerp(lerp(entry, arm[1], u), lerp(arm[1], exit, u), u), norm(lerp(upper, lower, u))];
     };
-    // Transport the underarm direction around the bend. Re-projecting a
-    // torso-facing vector at every ring can flip the tube across the forearm.
+    // (the underarm direction carried round the bend without twisting: measured afresh at each ring, toward the trunk,
+    // it flips over past the elbow of a raised arm while its side doesn't, which lays the forearm inside out)
     const inward = sub([B.pelvis[0], arm[0][1], B.pelvis[2]], arm[0]);
     const under = norm(sub(inward, scale(upper, dot(inward, upper))));
     const winding = dot(cross(upper, under), B.r) < 0 ? 1 : -1;
@@ -232,9 +236,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       for (let c = 0; c < SCOLS; c++) {
         // (the cap's crown carried down into the first rows, fading out where the sleeve is a plain tube)
         const fade = 1 - Math.min(1, (t * S.length) / Math.max(0.04, capH * 1.6));
-        // (the bend: length added along the outside (the crown's side, away from the underarm seam), from the upper arm
-        // through the elbow)
-        const outside = Math.sin((Math.PI * c) / (SCOLS - 1)) ** 2, bendY = (S.bend ?? 0) * outside * Math.max(0, Math.min(1, (t - 0.15) / 0.55));
+        // (the bend: length added along the outside (the crown's side, away from the underarm seam) and as much taken
+        // off the inside, over the 20 cm round the elbow: not above it, where the inside is the armpit's)
+        const outside = Math.sin((Math.PI * c) / (SCOLS - 1)) ** 2 - 0.5, bendY = (S.bend ?? 0) * outside * Math.max(0, Math.min(1, (t * S.length - (segs[0] - 0.1)) / 0.2));
         // (symmetric about its centre line, so the underarm seam's two edges are the same length)
         // (one paper for both: each is laid with its underarm seam toward the body and its first quarter to the front, and
         // the body's on opposite sides of the two arms, so the pair comes out mirror images, as a pair is cut)
@@ -259,17 +263,6 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       void nearFront;
       let k = 0; while (k < L.length - 2 && L[k + 1] < want) k++;
       stitches.push({ p: n + c, q: loop[k], q2: loop[k + 1], t: (want - L[k]) / Math.max(1e-9, L[k + 1] - L[k]), seam: `sleeve cap ${s}` });
-      // Lay the cap directly in its armhole before fitting. Each column
-      // blends from its own notch into the sleeve over the first few rows.
-      const st = stitches[stitches.length - 1], edge = lerp(atAll[st.q], atAll[st.q2], st.t);
-      const shift = sub(edge, piece.at[c]);
-      for (let r = 0; r < SROWS; r++) {
-        const u = Math.min(1, (r / (SROWS - 1)) / 0.25), w = 1 - u * u * (3 - 2 * u);
-        const i = r * SCOLS + c;
-        piece.at[i] = atAll[n + i] = madd(piece.at[i], shift, w);
-        if (c === 0) piece.at[i + SCOLS - 1] = atAll[n + i + SCOLS - 1] = piece.at[i];
-      }
-
     }
     n += SROWS * SCOLS;
   }

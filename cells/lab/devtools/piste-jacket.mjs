@@ -36,7 +36,7 @@ const limit = () => {
   for (const qq of M.QUARTERS) P.widths[qq] = P.widths[qq].map((w, k) => Math.max(DRAFT.widths[qq][k] * 0.75, Math.min(DRAFT.widths[qq][k] * 1.25, w)));
   for (const qq of M.QUARTERS) P.lengths[qq] = Math.min(DRAFT.lengths[qq] * 1.2, P.lengths[qq]);
   for (const sd of ['W', 'R']) { P.sleeves[sd].round = P.sleeves[sd].round.map((x, k) => Math.max(DRAFT.sleeves[sd].round[k] * 0.75, Math.min(DRAFT.sleeves[sd].round[k] * 1.25, x))); P.sleeves[sd].length = Math.min(DRAFT.sleeves[sd].length * 1.1, P.sleeves[sd].length); }
-  for (const sd of ['W', 'R']) P.sleeves[sd].bend = Math.min(0.12, P.sleeves[sd].bend ?? 0);
+  for (const sd of ['W', 'R']) P.sleeves[sd].bend = Math.min(0.24, P.sleeves[sd].bend ?? 0);
 };
 for (let round = 1; round <= ROUNDS; round++) {
   const t0 = Date.now();

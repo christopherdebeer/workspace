@@ -408,4 +408,10 @@ const lunge = (k, b, s) => (k === 0 ? { ...idle(), extend: 1, lunge: s > 0.3 } :
   const parts = ev.filter((e) => e.type === 'light').map((e) => e.light.part);
   console.log(`      (${b.score.join('–')} in ${simulated.toFixed(0)} s, ${ms.toFixed(0)} ms; touches on ${parts.join(', ')})`);
 }
+// the drafted jacket (?jacket=draft) holds together, skinned, through an extension, a replay's copy and the recovery
+{
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync(process.execPath, [new URL('./piste-jacket-motion.mjs', import.meta.url).pathname], { encoding: 'utf8' });
+  c.ok('the drafted jacket isn\'t pulled apart by an extension (devtools/piste-jacket-motion.mjs)', r.status === 0, (r.stderr || '').split('\n').find((l) => l.includes('Error')) ?? '');
+}
 c.done();
