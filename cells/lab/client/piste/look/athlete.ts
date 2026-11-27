@@ -16,6 +16,7 @@
  * weapon hand a gloved hand on the grip (fingers round it, the thumb along it, the knuckle ridge, the cuff over the
  * sleeve); the rear hand bare and relaxed.
  */
+import { bareBody } from './body';
 import { Fencer } from '../fencer';
 import { EPEE } from '../weapons';
 import { type V, add, cross, dot, len, lerp, madd, norm, scale, sub } from '../v3';
@@ -271,10 +272,11 @@ export interface Draft { x: number[]; tris: number[]; uv: number[]; seam: number
 /** where the garments were sewn, as the last athlete built them (for devtools/piste-seams.mjs) */
 export const SEAMS: { what: string; rows: number[]; cols: number[]; heights: number[] }[] = [];
 
-export function buildAthlete(o: { draft?: Draft } = {}): Athlete {
+export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete {
   const f = new Fencer(EPEE, 0, 1);
   f.pose();
   const m = new SkinMesh(), bind = boneFrames(f), c = f.capsules, F = f.frame, up: V = [0, 1, 0];
+  if (o.bare) return bareAthlete(f, bind);
   const fab = () => MAT.fabric, white = (): C => [1, 1, 1];
 
   // ── the jacket: one body from the hem to the collar, a sloping shoulder each side ────────────────────────────────
@@ -734,6 +736,20 @@ export function buildAthlete(o: { draft?: Draft } = {}): Athlete {
   bakeContactShade(m);
   if (o.draft) return dressIn(m, o.draft, bind, torsoWeights);
   return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: m.pieces };
+}
+
+/** the athlete undressed (`?body=bare`): its body (body.ts), skinned, nothing on it */
+function bareAthlete(f: Fencer, bind: Frame[]): Athlete {
+  const m = new SkinMesh(), body = bareBody(f);
+  for (const part of body.parts) {
+    const rings: Ring[] = part.sections.map((s) => ({ c: s.c, u: s.u, w: s.w, r: (a: number) => { const R = s.R(a); return [R, R] as [number, number]; } }));
+    // (what the eye inside the head doesn't see of its own body)
+    const eye = part.region === 'torso' ? PART.torso : part.region === 'head' ? PART.head : part.region === 'rearArm' ? PART.rearArm : part.name === 'upper arm W' ? PART.torso : PART.always;
+    loft(m, rings, { seg: part.region === 'torso' ? 48 : 24, col: () => COL.skin, mat: () => MAT.skin, capA: part.capA, capB: part.capB,
+      weights: (i) => part.sections[i].bones.map(([b, w]) => [B[b], w] as [number, number]), extra: () => [0, 0, 0, eye] });
+  }
+  bakeContactShade(m);
+  return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: [] };
 }
 
 /**

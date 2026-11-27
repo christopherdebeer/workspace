@@ -255,7 +255,8 @@ export class Renderer {
     const gl = this.gl;
     this.athlete = A;
     if (this.clothShaders) {
-      this.cloth = GpuCloth.create(gl, this.athlete);
+      // (nothing to simulate on a body with nothing on)
+      this.cloth = A.pieces.length ? GpuCloth.create(gl, this.athlete) : null;
       if (this.cloth) this.cloth.stress = Math.max(1, Math.min(16, Math.round(this.clothStress)));
       for (const [pass, U] of [[this.skin, this.uk], [this.skinShade, this.uks]] as const) {
         gl.useProgram(pass);
@@ -291,6 +292,8 @@ export class Renderer {
   }
 
   /** dress the fencers in a drafted jacket: its settled points (fencer frame), triangles, weave coordinates and seam distances */
+  /** the fencers undressed (`?body=bare`): the body the kit's fitted to */
+  setBare() { this.useAthlete(buildAthlete({ bare: true })); }
   setDraft(d: Draft) {
     // (the athlete rebuilt in it: skinned, and simulated as cloth when the cloth's on)
     this.useAthlete(buildAthlete({ draft: d }));

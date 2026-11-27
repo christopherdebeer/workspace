@@ -109,6 +109,8 @@ const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStr
 // (dressed before anything runs, so a still's cloth has the same history in either jacket)
 const dressed: Promise<void> = (() => {
   const root = document.documentElement.dataset.assets;
+  // (`body=bare`: the fencers undressed, the body the kit's fitted to)
+  if (qs.get('body') === 'bare') { renderer.setBare(); return Promise.resolve(); }
   if (qs.get('jacket') === 'loft' || !root) return Promise.resolve();
   return fetch(root + 'jacket-draft.json').then((r) => r.json()).then((d) => renderer.setDraft(d)).catch((e) => console.warn('no drafted jacket', e));
 })();
