@@ -26,20 +26,6 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
   });
   // (the jacket's body goes round the trunk; its sleeves round the arms too)
   const isSleeve = new Uint8Array(n); G.pieces.forEach((pc) => { if (pc.kind === 'sleeve') isSleeve.fill(1, pc.base, pc.base + pc.rows * pc.cols); });
-  // The fitting form supports sleeve rows along the bent arm. Constrain only
-  // their centres: cloth can still slide round the arm and gather at the elbow.
-  // (provisional, and a crutch: without it the weapon sleeve's underarm sags against the ribs, where it's skinned mostly
-  // to the arm, and an extension pulls it 7 cm from its neighbours (devtools/piste-jacket-motion.mjs). The tailor's
-  // answer is an underarm gusset. The proof (look/proof.ts) settles free, without it)
-  const rings: { start: number; cols: number; centre: V }[] = [];
-  if (!o.free) for (const pc of G.pieces) {
-    if (pc.kind !== 'sleeve') continue;
-    for (let r = 1; r < pc.rows - 1; r++) {
-      const start = pc.base + r * pc.cols, centre: V = [0, 0, 0];
-      for (let c = 0; c < pc.cols - 1; c++) for (let a = 0; a < 3; a++) centre[a] += G.at[start + c][a] / (pc.cols - 1);
-      rings.push({ start, cols: pc.cols, centre });
-    }
-  }
   const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 };
   const STEP = 0.005;
   const h = 1 / 240, steps = Math.round((o.seconds ?? 6) / h), thick = o.thick ?? 0.004;
@@ -77,21 +63,6 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
       for (const tie of o.free ? [] : G.ties ?? []) {
         const a = tie.p * 3, dx = x[a] - tie.at[0], dy = x[a + 1] - tie.at[1], dz = x[a + 2] - tie.at[2], l = Math.hypot(dx, dy, dz);
         if (l > tie.len) { const m = tie.len / l; x[a] = tie.at[0] + dx * m; x[a + 1] = tie.at[1] + dy * m; x[a + 2] = tie.at[2] + dz * m; }
-      }
-      for (const { start, cols, centre } of rings) {
-        let dx = 0, dy = 0, dz = 0;
-        for (let c = 0; c < cols - 1; c++) {
-          const j = (start + c) * 3;
-          dx += x[j]; dy += x[j + 1]; dz += x[j + 2];
-        }
-        dx = dx / (cols - 1) - centre[0]; dy = dy / (cols - 1) - centre[1]; dz = dz / (cols - 1) - centre[2];
-        const d = Math.hypot(dx, dy, dz), slack = 0.012;
-        if (d <= slack) continue;
-        const k = 1 - slack / d;
-        for (let c = 0; c < cols; c++) {
-          const j = (start + c) * 3;
-          x[j] -= dx * k; x[j + 1] -= dy * k; x[j + 2] -= dz * k;
-        }
       }
       if (!o.free) for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
       // the body (look/body.ts): out of it, a little off it, the friction as below (the jacket's body out of the trunk

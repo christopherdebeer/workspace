@@ -258,12 +258,19 @@ export class GpuCloth {
       for (let r = 0; r < p.R; r++) for (let c = 0; c < S; c++) {
         const v = (p.base + r * p.J + c) * SKIN_STRIDE, t = (off + r * S + c) * 4;
         const pinned = pins.has(p.base + r * p.J + c);
-        bind.set([V[v], V[v + 1], V[v + 2], pinned ? 0 : ease(p, r / (p.R - 1))], t);
-        bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);
+        // (on the body, where the athlete has one under it: the cloth may come in until it meets the skin, not just a couple of
+        // millimetres in from where it was settled, and where it stands off the body it has room to fall toward it. The
+        // normal it's held off by is the body's. What's fastened or pinned stays as it is)
+        const vi = p.base + r * p.J + c, gap = athlete.bodyGap, e0 = pinned ? 0 : ease(p, r / (p.R - 1));
+        const onBody = !!gap && e0 > 0.002 && gap[vi * 4 + 3] > 0.003, d = onBody ? gap![vi * 4 + 3] : 0;
+        const slack = onBody ? e0 + Math.min(0.03, 0.6 * (d - 0.003)) : e0, inset = onBody ? d - 0.003 : 0.002;
+        bind.set([V[v], V[v + 1], V[v + 2], slack], t);
+        if (onBody) bindN.set([gap![vi * 4], gap![vi * 4 + 1], gap![vi * 4 + 2], thickness(p)], t);
+        else bindN.set([V[v + 3], V[v + 4], V[v + 5], thickness(p)], t);
         jt.set(V.subarray(v + 12, v + 16), t); wt.set(V.subarray(v + 16, v + 20), t);
         metaA.set([r, c, p.R, p.closed ? S : -S], t); // (MetaB: first texel; thickness, negative for a piece the arms don't press (the sleeves themselves); backstop
         // inset; ease. Packed so the solver reads ten textures: phones allow sixteen, and the renderer keeps three)
-        metaB.set([off, (p.kind.startsWith('sleeve') ? -1 : 1) * thickness(p), 0.002, pinned ? 0 : ease(p, r / (p.R - 1))], t);
+        metaB.set([off, (p.kind.startsWith('sleeve') ? -1 : 1) * thickness(p), inset, slack], t);
       }
       off += p.R * S;
     });

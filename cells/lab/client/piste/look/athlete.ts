@@ -16,7 +16,7 @@
  * weapon hand a gloved hand on the grip (fingers round it, the thumb along it, the knuckle ridge, the cuff over the
  * sleeve); the rear hand bare and relaxed.
  */
-import { bareBody } from './body';
+import { bareBody, nearSurface } from './body';
 import { Fencer } from '../fencer';
 import { EPEE } from '../weapons';
 import { type V, add, cross, dot, len, lerp, madd, norm, scale, sub } from '../v3';
@@ -263,6 +263,9 @@ export interface ClothPiece { kind: 'jacket' | 'sleeveW' | 'sleeveR' | 'breeches
 export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[]; count: number; pieces: ClothPiece[];
   /** what's sewn to what between pieces (vertex pairs): a drafted garment's seams */
   seams?: [number, number][];
+  /** for each vertex (4 floats: normal, distance), the undressed body's surface under it at rest (body.ts), for the cloth to
+   * lie on: where a drafted garment's point is, how far off the body it stands and which way is out */
+  bodyGap?: Float32Array;
   /** welded seams: a point drawn (and simulated) on the edge it's sewn to, between two points (p, q, q2, t) */
   stitches?: [number, number, number, number][] }
 /** a drafted garment (devtools/piste-jacket.mjs: static/piste/jacket-draft.json), settled on the body in guard, which is
@@ -734,7 +737,7 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
   }
 
   bakeContactShade(m);
-  if (o.draft) return dressIn(m, o.draft, bind, torsoWeights);
+  if (o.draft) return dressIn(m, o.draft, bind, torsoWeights, bareBody(f));
   return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: m.pieces };
 }
 
@@ -757,7 +760,7 @@ function bareAthlete(f: Fencer, bind: Frame[]): Athlete {
  * drafted point follows its own panel and the arm inside its sleeve; the cloth
  * simulation takes them as flat pieces, sewn at their seams (look/cloth.ts).
  */
-function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W): Athlete {
+function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W, body: ReturnType<typeof bareBody>): Athlete {
   const old = m.pieces.filter((p) => p.kind !== 'breeches'), gone = new Uint8Array(m.n);
   for (const p of old) gone.fill(1, p.base, p.base + p.R * p.J);
   const index: number[] = [];
@@ -802,7 +805,10 @@ function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W
   for (const t of D.tris) index.push(base + t);
   const seams = D.seams.map(([a, b]) => [base + a, base + b] as [number, number]);
   const stitches = (D.stitches ?? []).map(([p, q, q2, t]) => [base + p, base + q, base + q2, t] as [number, number, number, number]);
-  return { verts: Float32Array.from(m.v), index: Uint32Array.from(index), bind, count: index.length, pieces, seams, stitches };
+  // (the body under each of the garment's points)
+  const bodyGap = new Float32Array(m.n * 4);
+  for (let i = 0; i < n; i++) { const q = nearSurface(body, at(i)); bodyGap.set([q.normal[0], q.normal[1], q.normal[2], q.d], (base + i) * 4); }
+  return { verts: Float32Array.from(m.v), index: Uint32Array.from(index), bind, count: index.length, pieces, seams, stitches, bodyGap };
 }
 
 /** Short-range occlusion in the rest garment. The sampled shell is discarded after the shared mesh is built. */
