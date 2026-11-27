@@ -118,7 +118,7 @@ const interp = (xs: number[], ys: number[], x: number) => {
 };
 
 /** a piece meshed: its points' rest places on the paper and first places round the body; its grid */
-export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve' | 'gusset'; quarter?: Quarter; side?: 'W' | 'R' }
+export interface Piece { name: string; rows: number; cols: number; flat: [number, number][]; at: V[]; base: number; kind: 'body' | 'sleeve' | 'gusset' | 'breeches'; quarter?: Quarter; side?: 'W' | 'R' }
 /** a stitch: point p sewn to the place between q and q2 (t of the way) */
 export interface Stitch { p: number; q: number; q2: number; t: number; /** which seam it's part of */ seam?: string }
 /** a point held at a place (a cuff under the glove's gauntlet) */

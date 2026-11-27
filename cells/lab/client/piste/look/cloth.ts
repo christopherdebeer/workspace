@@ -180,12 +180,12 @@ void main(){
 
 /** what the skinning shaders need to draw the cloth's points in place of the skinned ones */
 const DRAW_GLSL = `
-uniform highp sampler2D clothX, clothSeam; uniform int clothOn, clothW; uniform ivec4 clothPiece[10];
+uniform highp sampler2D clothX, clothSeam; uniform int clothOn, clothW; uniform ivec4 clothPiece[16];
 vec3 clothTx(int i){ return texelFetch(clothX, ivec2(i % clothW, i / clothW), 0).xyz; }
 vec3 clothPt(int off, int S, int r, int c){ return clothTx(off + r * S + c); }
 void clothAt(inout vec3 q, inout vec3 nn){
   if (clothOn == 0) return;
-  for (int k = 0; k < 10; k++) {
+  for (int k = 0; k < 16; k++) {
     // (a piece: its first vertex, rings, columns (negative: an open, flat piece, no column repeated), first texel)
     ivec4 P = clothPiece[k]; int J = abs(P.z), rel = gl_VertexID - P.x; bool open = P.z < 0;
     if (P.y == 0 || rel < 0 || rel >= P.y * J) continue;
@@ -245,12 +245,12 @@ export class GpuCloth {
   }
 
   private constructor(readonly gl: WebGL2RenderingContext, athlete: Athlete) {
-    const ps = athlete.pieces.slice(0, 10), cols = (p: ClothPiece) => (p.closed ? p.J - 1 : p.J);
+    const ps = athlete.pieces.slice(0, 16), cols = (p: ClothPiece) => (p.closed ? p.J - 1 : p.J);
     this.N = ps.reduce((s, p) => s + p.R * cols(p), 0);
     this.H = Math.ceil(this.N / this.W);
     const n = this.W * this.H, bind = new Float32Array(n * 4), bindN = new Float32Array(n * 4), jt = new Float32Array(n * 4), wt = new Float32Array(n * 4);
     const metaA = new Float32Array(n * 4), metaB = new Float32Array(n * 4), V = athlete.verts;
-    this.pieces = new Int32Array(40);
+    this.pieces = new Int32Array(64);
     let off = 0;
     ps.forEach((p, k) => {
       const S = cols(p), pins = new Set(p.pins ?? []);

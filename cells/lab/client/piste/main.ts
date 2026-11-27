@@ -10,6 +10,7 @@
  * over), thumb (hand | point: the right thumb's scheme), replay=0, time (slow everything: 0.25), t (run on this many
  * seconds first), still, readout, mask=0, seed, preview.
  */
+import { mergeDrafts } from './look/athlete';
 import { Bout, type BoutEvent } from './bout';
 import { WEAPONS, EPEE } from './weapons';
 import { Opponent, Dummy, SPARRING, LEVELS } from './ai';
@@ -116,7 +117,10 @@ const dressed: Promise<void> = (() => {
   // (`body=bare`: the fencers undressed, the body the kit's fitted to)
   if (qs.get('body') === 'bare') { renderer.setBare(); return Promise.resolve(); }
   if (qs.get('jacket') === 'loft' || !root) return Promise.resolve();
-  return fetch(root + 'jacket-draft.json').then((r) => r.json()).then((d) => renderer.setDraft(d)).catch((e) => console.warn('no drafted jacket', e));
+  // (and the breeches, drafted and settled by devtools/piste-breeches.mjs; `breeches=loft`: the lofted ones)
+  const get = (f: string) => fetch(root + f).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  return Promise.all([get('jacket-draft.json'), qs.get('breeches') === 'loft' ? null : get('breeches-draft.json')])
+    .then(([j, b]) => { if (j) renderer.setDraft(b ? mergeDrafts(j, b) : j); }).catch((e) => console.warn('no drafted kit', e));
 })();
 const director = new TimeDirector(bout, assist);
 const recorder = replays ? new Recorder(bout) : null;

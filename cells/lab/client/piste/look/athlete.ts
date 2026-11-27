@@ -270,7 +270,18 @@ export interface Athlete { verts: Float32Array; index: Uint32Array; bind: Frame[
   stitches?: [number, number, number, number][] }
 /** a drafted garment (devtools/piste-jacket.mjs: static/piste/jacket-draft.json), settled on the body in guard, which is
  * the athlete's resting pose: its points, triangles, paper places, seams, pieces */
-export interface Draft { x: number[]; tris: number[]; uv: number[]; seam: number[]; flat: number[]; seams: [number, number][]; stitches?: [number, number, number, number][]; pieces: { name: string; kind: ClothPiece['kind']; base: number; rows: number; cols: number }[] }
+export interface Draft { x: number[]; tris: number[]; uv: number[]; seam: number[]; flat: number[]; seams: [number, number][]; stitches?: [number, number, number, number][]; pieces: { name: string; kind: ClothPiece['kind']; base: number; rows: number; cols: number; joint?: number; crotch?: number }[] }
+
+/** two drafted garments as one (the jacket's and the breeches': devtools/piste-jacket.mjs, piste-breeches.mjs) */
+export function mergeDrafts(a: Draft, b: Draft): Draft {
+  const o = a.x.length / 3, sh = (v: number) => v + o;
+  return {
+    x: [...a.x, ...b.x], tris: [...a.tris, ...b.tris.map(sh)], uv: [...a.uv, ...b.uv], seam: [...a.seam, ...b.seam], flat: [...a.flat, ...b.flat],
+    seams: [...a.seams, ...b.seams.map(([p, q]) => [sh(p), sh(q)] as [number, number])],
+    stitches: [...(a.stitches ?? []), ...(b.stitches ?? []).map(([p, q, q2, t]) => [sh(p), sh(q), sh(q2), t] as [number, number, number, number])],
+    pieces: [...a.pieces, ...b.pieces.map((p) => ({ ...p, base: sh(p.base) }))],
+  };
+}
 
 /** where the garments were sewn, as the last athlete built them (for devtools/piste-seams.mjs) */
 export const SEAMS: { what: string; rows: number[]; cols: number[]; heights: number[] }[] = [];
@@ -280,6 +291,8 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
   f.pose();
   const m = new SkinMesh(), bind = boneFrames(f), c = f.capsules, F = f.frame, up: V = [0, 1, 0];
   if (o.bare) return bareAthlete(f, bind);
+  /** the lofted breeches' vertices (the seat, each leg and its band), for a drafted pair to replace */
+  const oldBreeches: [number, number][] = [];
   const fab = () => MAT.fabric, white = (): C => [1, 1, 1];
 
   // ── the jacket: one body from the hem to the collar, a sloping shoulder each side ────────────────────────────────
@@ -500,12 +513,14 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
     const t = i / 11;
     return { c: madd(pelvis, up, -0.105 + t * 0.09), u: hipLine, w: norm(cross(hipLine, up)), r: () => [0.032 + 0.07 * t, 0.032 + 0.05 * t] };
   });
+  const seat0 = m.n;
   loft(m, seat, { panel: 2, seg: 32, col: white, mat: fab, tone: TONE.breeches, capA: true,
     weights: (i, j) => {
       const thigh = 0.35 * (1 - smooth(i / 11));
       const front = smooth((1 + Math.cos(j * Math.PI / 16)) / 2);
       return [[B.pelvis, 1 - thigh], [B.thighF, thigh * front], [B.thighB, thigh * (1 - front)]];
     }, extra: () => [0, 0, 0, PART.torso] });
+  oldBreeches.push([seat0, m.n]);
 
   // The crotch strap: from the jacket's hem in front, between the legs, to its hem behind (it holds the jacket down
   // in a lunge). Front and back are the hem's points facing the chest's way (the fencer's left, −r) and the back's
@@ -552,6 +567,7 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
     for (let i = 0; i < N; i++) { const s = (i / (N - 1)) * band; add1(s, TONE.breeches); }
     const leg1 = rings.splice(0), tone1 = tones.splice(0); mats.splice(0);
     const wts = (s: number): W => { const k = blend(s, sK - 0.06, sK + 0.06), hipK = 1 - smooth(blend(s, 0, 0.2)); return [[th === 9 ? B.thighF : B.thighB, (1 - k) * (1 - hipK * 0.75)], [sh === 10 ? B.shinF : B.shinB, k], [B.pelvis, (1 - k) * hipK * 0.75]]; };
+    const leg0 = m.n;
     loft(m, leg1, { fold: { driver: th === 9 ? 2 : 3, relief: (row,a) => {
       const slack = 0.5-0.5*Math.cos(a);
       return slack*(0.013*pleat(row,0.78+0.06*Math.sin(a),0.045)
@@ -559,6 +575,8 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
     } }, cloth: { kind: 'breeches', joint: sK / band }, panel: 2, seg: 32, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
     // the band: a narrow cuff, a little proud
     const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.063, 0.06] }; });
+    // (the band kept over a drafted pair's hem: it's their knee band too)
+    oldBreeches.push([leg0, m.n]);
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
     for (let i = 0; i < 14; i++) { const s = band + (1 - band) * (i / 13); add1(s, TONE.sock); }
     const leg2 = rings.splice(0);
@@ -737,7 +755,7 @@ export function buildAthlete(o: { draft?: Draft; bare?: boolean } = {}): Athlete
   }
 
   bakeContactShade(m);
-  if (o.draft) return dressIn(m, o.draft, bind, torsoWeights, bareBody(f));
+  if (o.draft) return dressIn(m, o.draft, bind, torsoWeights, bareBody(f), oldBreeches);
   return { verts: Float32Array.from(m.v), index: Uint32Array.from(m.i), bind, count: m.i.length, pieces: m.pieces };
 }
 
@@ -760,17 +778,36 @@ function bareAthlete(f: Fencer, bind: Frame[]): Athlete {
  * drafted point follows its own panel and the arm inside its sleeve; the cloth
  * simulation takes them as flat pieces, sewn at their seams (look/cloth.ts).
  */
-function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W, body: ReturnType<typeof bareBody>): Athlete {
-  const old = m.pieces.filter((p) => p.kind !== 'breeches'), gone = new Uint8Array(m.n);
+function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W, body: ReturnType<typeof bareBody>, oldBreeches: [number, number][]): Athlete {
+  // (the lofted kit the draft replaces: the jacket and sleeves; and the breeches, the seat and the bands, if it has them)
+  const drafted = D.pieces.some((p) => p.kind === 'breeches');
+  const old = m.pieces.filter((p) => drafted || p.kind !== 'breeches'), gone = new Uint8Array(m.n);
   for (const p of old) gone.fill(1, p.base, p.base + p.R * p.J);
+  if (drafted) for (const [a, b] of oldBreeches) gone.fill(1, a, b);
   const index: number[] = [];
   for (let i = 0; i < m.i.length; i += 3) if (!gone[m.i[i]] && !gone[m.i[i + 1]] && !gone[m.i[i + 2]]) index.push(m.i[i], m.i[i + 1], m.i[i + 2]);
   const at = (i: number): V => [D.x[i * 3], D.x[i * 3 + 1], D.x[i * 3 + 2]], n = D.x.length / 3, base = m.n;
   // (normals from its triangles, as settled)
   const N = Array.from({ length: n }, () => [0, 0, 0] as V);
   for (let t = 0; t < D.tris.length; t += 3) { const [a, b, c] = [D.tris[t], D.tris[t + 1], D.tris[t + 2]], nr = cross(sub(at(b), at(a)), sub(at(c), at(a))); for (const k of [a, b, c]) for (let j = 0; j < 3; j++) N[k][j] += nr[j]; }
-  const pieces = m.pieces.filter((p) => p.kind === 'breeches');
+  const pieces = m.pieces.filter((p) => p.kind === 'breeches' && !drafted);
   for (const pc of D.pieces) {
+    if (pc.kind === 'breeches') {
+      // (the breeches: above the crotch with the pelvis, a little of the thigh toward the side (none at the centre seams,
+      // where the two legs' panels meet); below it with the thigh, the pelvis's share fading down it; the shin at the knee)
+      const front = pc.name.includes(' F '), thigh = front ? B.thighF : B.thighB, shin = front ? B.shinF : B.shinB;
+      const rc = pc.crotch ?? 0.34, rk = pc.joint ?? 0.9;
+      for (let k = 0; k < pc.rows * pc.cols; k++) {
+        const i = pc.base + k, row = Math.floor(k / pc.cols) / (pc.rows - 1), cf = (k % pc.cols) / (pc.cols - 1);
+        let w: W;
+        if (row <= rc) { const t = 0.4 * smooth(row / rc) * cf; w = [[B.pelvis, 1 - t], [thigh, t]]; }
+        else { const hipK = 0.4 * (1 - smooth(blend(row, rc, rc + 0.25))), kk = smooth(blend(row, rk - 0.06, rk + 0.04)); w = [[B.pelvis, hipK * (1 - kk)], [thigh, (1 - hipK) * (1 - kk)], [shin, kk]]; }
+        m.vert(at(i), norm(N[i]), [0.95, D.seam[i], TONE.breeches], MAT.fabric, [D.uv[i * 2], D.uv[i * 2 + 1]], w.filter((e) => e[1] > 0), [0, 0, 0, PART.always]);
+      }
+      pieces.push({ kind: 'breeches', base: base + pc.base, R: pc.rows, J: pc.cols, closed: false, joint: rk,
+        flat: Array.from({ length: pc.rows * pc.cols }, (_, k) => [D.flat[(pc.base + k) * 2], D.flat[(pc.base + k) * 2 + 1]] as [number, number]) });
+      continue;
+    }
     const weaponArm = pc.kind === 'sleeveW', upper = weaponArm ? B.upperW : B.upperR, fore = weaponArm ? B.foreW : B.foreR;
     let elbowRow = 0;
     if (pc.kind !== 'jacket') {
