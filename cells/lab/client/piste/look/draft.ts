@@ -346,6 +346,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       piece.flat.push([want * (1 - 0.03 * u), u * HIGH]);
       piece.at.push(madd(madd(base0, [0, 1, 0], u * HIGH), toNeck, u * 0.005));
     }
+    // (its two ends laid together where they're fastened: held where it's laid, apart they could never close)
+    for (let r = 0; r < CR; r++) { const i0 = r * CC, i1 = r * CC + CC - 1, mid = scale(add(piece.at[i0], piece.at[i1]), 0.5);
+      for (let k = 0; k < 3; k++) { const w = 1 - k / 3; piece.at[i0 + k] = add(scale(piece.at[i0 + k], 1 - w), scale(mid, w)); piece.at[i1 - k] = add(scale(piece.at[i1 - k], 1 - w), scale(mid, w)); } }
     pieces.push(piece); flatAll.push(...piece.flat); atAll.push(...piece.at);
     for (let c = 0; c < CC; c++) { const [qa, qb, t] = along((c / (CC - 1)) * neckLen); stitches.push({ p: n + c, q: qa, q2: qb, t, seam: 'collar' }); }
     for (let r = 1; r < CR; r++) pair(n + r * CC + CC - 1, n + r * CC, 'collar fastening');
