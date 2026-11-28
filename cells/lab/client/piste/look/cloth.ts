@@ -53,7 +53,10 @@ export const CLOTH = { step: 1 / 480, maxSteps: 10, passes: 3, stretch: 1, shear
    * broad ones */
   thick: FABRIC.thickness / FAB0.thickness,
   /** how hard a point where the cloth has folded over itself is pulled back toward a smooth sheet, a pass */
-  unfold: 0.7 };
+  unfold: 0.7,
+  /** the sleeves' own scales on those two (`sleevethick=`, `sleeveunfold=`: for trying a sleeve that keeps less of the
+   * arm's shape, and lets a fold turn further before it's smoothed, the rest of the kit as it is) */
+  sleeveThick: 1, sleeveUnfold: 1 };
 
 /** wear another fabric (`fabric=old`: the lighter, stiffer cloth the dials were first set by eye for), before the cloth starts */
 export function useFabric(f: typeof FABRIC) {
@@ -82,7 +85,7 @@ function ease(p: ClothPiece, row: number): number {
 /** how thick each piece's cloth is (the pull a pass toward the skin's curvature): the jacket's body is the stiffest
  * (layered, and the 800 N cloth); a sleeve bends at the elbow; the breeches between */
 function thickness(p: ClothPiece): number {
-  return p.kind === 'jacket' ? 0.38 : p.kind === 'breeches' ? 0.3 : 0.2;
+  return p.kind === 'jacket' ? 0.38 : p.kind === 'breeches' ? 0.3 : 0.2 * CLOTH.sleeveThick;
 }
 
 const QUAD_VS = `#version 300 es
@@ -125,7 +128,7 @@ void main(){
  * out straight, with no small arrays indexed in a loop: on phone GPUs those spill out of registers and cost several
  * times the whole pass (the first version ran at an eighth of this speed on an iPhone) */
 const SOLVE_FS = HEAD + `
-uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1, Seam, SeamB; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
+uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1, Seam, SeamB; uniform float s, kStretch, kShear, kBend, omega, kThick; uniform vec2 kUnfold;
 /** the arms (upper and fore, each side: a, b, radius), for the jacket's body to lie against */
 uniform vec4 armA[4], armB[4];
 const float LAYER = ${(2 * FABRIC.thickness + 0.009).toFixed(4)};
@@ -172,6 +175,8 @@ void main(){
     x += 0.5 * d / max(1.0, w);
   }
   vec3 a = mix(texelFetch(A0, tc(i), 0).xyz, texelFetch(A1, tc(i), 0).xyz, s);
+  // (how far the rule below took it as folded over, kept in the fourth channel: 'unfold=show' shows it)
+  float unf = 0.0;
   if (up && down && okc(c + 1) && okc(c - 1)) {
     vec3 aU = anchorAt(r + 1, c), aD = anchorAt(r - 1, c), aR = anchorAt(r, c + 1), aL = anchorAt(r, c - 1);
     // thickness: the point's offset from its neighbours' middle eased toward the skin's offset there
@@ -181,7 +186,8 @@ void main(){
     // the skin grid's), it's crossed itself; pull it back toward a smooth sheet
     vec3 m = cross(xU - xD, xR - xL), mA = cross(aU - aD, aR - aL);
     float agree = dot(m, mA) / max(1e-12, length(m) * length(mA));
-    if (agree < 0.3) x = mix(x, sheet, kUnfold * clamp((0.3 - agree) / 0.6, 0.0, 1.0));
+    unf = clamp((0.3 - agree) / 0.6, 0.0, 1.0);
+    if (agree < 0.3) x = mix(x, sheet, (mb.y < 0.0 ? kUnfold.y : kUnfold.x) * unf);
   }
   // cloth on cloth: the jacket over the breeches. Its point kept outside the breeches' surface where they are now (the
   // nearest of the point found under it at rest and that point's four neighbours, the plane through it facing the way
@@ -213,7 +219,7 @@ void main(){
     if (dn < -mb.z) { x += (-mb.z - dn) * nn; e = x - a; }
     float el = length(e); if (el > slack) x = a + e * (slack / el);
   }
-  o = vec4(x, 1.0);
+  o = vec4(x, 1.0 + unf);
 }`;
 
 /** what the skinning shaders need to draw the cloth's points in place of the skinned ones */
@@ -237,8 +243,13 @@ void clothAt(inout vec3 q, inout vec3 nn){
     vec3 dv = clothPt(P.w, S, min(r + 1, P.y - 1), c) - clothPt(P.w, S, max(r - 1, 0), c);
     // (how stretched the cloth is here, across and along: its lengths now against the pattern's (its rest lengths:
     // up, down, right, left), for the creases (shaders.ts): bunched, they deepen; taut, they flatten)
+    // (each edge's own length, not the chord across the two: bent, a chord shortens though no edge has)
     vec4 rl = texelFetch(clothRest, ivec2(ti % clothW, ti / clothW), 0);
-    clothStrain = vec2(length(du) / max(1e-5, rl.z + rl.w), length(dv) / max(1e-5, rl.x + rl.y));
+    vec3 me = clothPt(P.w, S, r, c);
+    float lR = cR == c ? 0.0 : length(clothPt(P.w, S, r, cR) - me), lL = cL == c ? 0.0 : length(me - clothPt(P.w, S, r, cL));
+    float lU = r + 1 >= P.y ? 0.0 : length(clothPt(P.w, S, r + 1, c) - me), lD = r == 0 ? 0.0 : length(me - clothPt(P.w, S, r - 1, c));
+    clothStrain = vec2((lR + lL) / max(1e-5, (lR > 0.0 ? rl.z : 0.0) + (lL > 0.0 ? rl.w : 0.0)), (lU + lD) / max(1e-5, (lU > 0.0 ? rl.x : 0.0) + (lD > 0.0 ? rl.y : 0.0)));
+    clothUnfold = texelFetch(clothX, ivec2(ti % clothW, ti / clothW), 0).w - 1.0;
     vec3 m = cross(dv, du);
     if (dot(m, m) > 1e-14) { m = normalize(m); nn = dot(m, nn) < 0.0 ? -m : m; }
     return;
@@ -290,6 +301,7 @@ export class GpuCloth {
     const ps = athlete.pieces.slice(0, 16), cols = (p: ClothPiece) => (p.closed ? p.J - 1 : p.J);
     this.N = ps.reduce((s, p) => s + p.R * cols(p), 0);
     this.H = Math.ceil(this.N / this.W);
+    { let off = 0; for (const p of ps) { this.kinds.push({ kind: p.kind, off, R: p.R, S: cols(p) }); off += p.R * cols(p); } }
     const n = this.W * this.H, bind = new Float32Array(n * 4), bindN = new Float32Array(n * 4), jt = new Float32Array(n * 4), wt = new Float32Array(n * 4);
     const metaA = new Float32Array(n * 4), metaB = new Float32Array(n * 4), V = athlete.verts;
     this.pieces = new Int32Array(64);
@@ -369,6 +381,14 @@ export class GpuCloth {
     this.vao = gl.createVertexArray()!;
   }
 
+  /** for the devtools: `f`'s cloth points now and where the skin carries them (x, y, z, and for the points the fold rule's
+   * weight), and each piece's kind and first texel, read back off the card */
+  probe(f: object): { x: Float32Array; a: Float32Array; meta: Float32Array; pieces: { kind: string; off: number; R: number; S: number }[] } | null {
+    const st = this.states.get(f); if (!st) return null;
+    const gl = this.gl, read = (t: WebGLTexture) => { const fb = this.fb([t]), out = new Float32Array(this.W * this.H * 4); gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.readPixels(0, 0, this.W, this.H, gl.RGBA, gl.FLOAT, out); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return out; };
+    return { x: read(st.x), a: read(st.a[1].tex[0]), meta: read(this.stat.metaB), pieces: this.kinds };
+  }
+  private kinds: { kind: string; off: number; R: number; S: number }[] = [];
   /** the texture of `f`'s cloth points now (to draw with), or null before its first step */
   points(f: object): WebGLTexture | null { return this.states.get(f)?.x ?? null; }
   /** the welded seams (each sewn point's place on the edge it's sewn to), for drawing */
@@ -414,7 +434,7 @@ export class GpuCloth {
         for (let it = 0; it < CLOTH.passes; it++) {
           const out = st.spare[0];
           this.pass('solve', this.fb([out]), { X: st.x, MetaA: this.stat.metaA, MetaB: this.stat.metaB, Rest0: this.stat.rest0, Rest1: this.stat.rest1, Rest2: this.stat.rest2, A0, A1, N0, N1, Seam: this.stat.seam, SeamB: this.stat.seamB }, (l) => {
-            gl.uniform1f(l.s, (k + 1) / n); gl.uniform1f(l.kStretch, CLOTH.stretch); gl.uniform1f(l.kShear, CLOTH.shear); gl.uniform1f(l.kBend, CLOTH.bend); gl.uniform1f(l.omega, CLOTH.omega); gl.uniform1f(l.kThick, CLOTH.thick); gl.uniform1f(l.kUnfold, CLOTH.unfold);
+            gl.uniform1f(l.s, (k + 1) / n); gl.uniform1f(l.kStretch, CLOTH.stretch); gl.uniform1f(l.kShear, CLOTH.shear); gl.uniform1f(l.kBend, CLOTH.bend); gl.uniform1f(l.omega, CLOTH.omega); gl.uniform1f(l.kThick, CLOTH.thick); gl.uniform2f(l.kUnfold, CLOTH.unfold, Math.min(1, CLOTH.unfold * CLOTH.sleeveUnfold));
             gl.uniform4fv(l.armA, arms.subarray(0, 16)); gl.uniform4fv(l.armB, arms.subarray(16, 32));
           });
           st.spare[0] = st.x; st.x = out;

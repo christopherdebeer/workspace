@@ -47,6 +47,8 @@ export class Renderer {
   private shadowTex: WebGLTexture; private shadowFb: WebGLFramebuffer;
   private kitTexture: WebGLTexture;
   exposure = 1.05;
+  /** the drawn creases (1) or none (0); and whether to show where the cloth's taken as folded over */
+  look = { creases: 1, unfold: 0 };
   /** the athlete: built once, resident on the GPU, skinned per fencer */
   private athlete!: Athlete;
   private skin: WebGLProgram; private skinShade: WebGLProgram;
@@ -72,7 +74,7 @@ export class Renderer {
     this.gl = gl;
     this.main = program(gl, MAIN_VS, MAIN_FS);
     this.shade = program(gl, SHADOW_VS, SHADOW_FS);
-    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha']) this.u[k] = gl.getUniformLocation(this.main, k);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'look']) this.u[k] = gl.getUniformLocation(this.main, k);
     // (with the cloth spliced into the skinning, if asked for and it splices; otherwise as before)
     let skinVS = SKIN_VS, shadowVS = SKIN_SHADOW_VS;
     if (opts.cloth) try { skinVS = withCloth(SKIN_VS, false); shadowVS = withCloth(SKIN_SHADOW_VS, true); this.clothShaders = true; } catch (e) { GpuCloth.failure = String((e as Error)?.message ?? e); console.warn(e); }
@@ -100,7 +102,7 @@ export class Renderer {
     }
     gl.activeTexture(gl.TEXTURE0);
     this.skinShade = program(gl, shadowVS, SHADOW_FS);
-    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uk[k] = gl.getUniformLocation(this.skin, k);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'look', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uk[k] = gl.getUniformLocation(this.skin, k);
     for (const k of ['lvp', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'foldLoad']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
     this.clothStress = opts.clothStress ?? 1;
     this.useAthlete(buildAthlete());
@@ -181,7 +183,7 @@ export class Renderer {
     gl.uniformMatrix4fv(this.u.lvp, false, lvp);
     gl.uniform3fv(this.u.eye, view.eye);
     gl.uniform3fv(this.u.sunDir, SUN);
-    gl.uniform1f(this.u.exposure, this.exposure);
+    gl.uniform1f(this.u.exposure, this.exposure); gl.uniform2f(this.u.look, this.look.creases, this.look.unfold);
     gl.uniform1f(this.u.clay, 0); gl.uniform1f(this.u.alpha, 1);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(this.u.shadow, 0);
     // contact shadows: under each shoe, and under each tip (w: how strongly)
@@ -202,7 +204,7 @@ export class Renderer {
     gl.useProgram(this.skin);
     const U = this.uk;
     gl.uniformMatrix4fv(U.vp, false, vpM); gl.uniformMatrix4fv(U.lvp, false, lvp);
-    gl.uniform3fv(U.eye, view.eye); gl.uniform3fv(U.sunDir, SUN); gl.uniform1f(U.exposure, this.exposure);
+    gl.uniform3fv(U.eye, view.eye); gl.uniform3fv(U.sunDir, SUN); gl.uniform1f(U.exposure, this.exposure); gl.uniform2f(U.look, this.look.creases, this.look.unfold);
     gl.uniform1f(U.clay, view.clay ? 1 : 0); gl.uniform1f(U.alpha, 1);
     gl.uniform1i(U.shadow, 0); gl.uniform4fv(U.feet, feet); gl.uniform4fv(U.tips, tips);
     gl.uniform3fv(U.bladeA, [...bout.fencers[0].blade.guard, ...bout.fencers[1].blade.guard]);

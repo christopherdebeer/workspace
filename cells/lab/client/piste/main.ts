@@ -11,7 +11,7 @@
  * seconds first), still, readout, mask=0, seed, preview.
  */
 import { mergeDrafts } from './look/athlete';
-import { useFabric, OLD_FABRIC } from './look/cloth';
+import { useFabric, OLD_FABRIC, CLOTH } from './look/cloth';
 import { Bout, type BoutEvent } from './bout';
 import { WEAPONS, EPEE } from './weapons';
 import { Opponent, Dummy, SPARRING, LEVELS } from './ai';
@@ -112,9 +112,16 @@ const you: Controller = {
 if (lesson) thumbs.allow = { ...lesson.controls };
 // (`fabric=old`: the kit in the lighter, stiffer cloth the dials were first set for, to compare)
 if (qs.get('fabric') === 'old') useFabric(OLD_FABRIC);
+if (qs.has('sleevethick')) CLOTH.sleeveThick = Math.max(0, Number(qs.get('sleevethick')) || 0);
+if (qs.has('sleeveunfold')) CLOTH.sleeveUnfold = Math.max(0, Number(qs.get('sleeveunfold')) || 0);
 const renderer = new Renderer(canvas, { cloth: pick('cloth') === 'sim', clothStress: Number(qs.get('clothx') ?? 1) || 1 });
 // (`exposure=0.8`: the camera's exposure, for judging the light)
 if (qs.has('exposure')) renderer.exposure = Number(qs.get('exposure')) || renderer.exposure;
+// (the cloth on trial: `creases=off` draws none of the creases, only the cloth's own folds; `unfold=show` shows red
+// where the solver takes the cloth as folded over and smooths it; `sleevethick=0.4` and `sleeveunfold=0` the sleeves'
+// pull toward the arm's shape and that smoothing, scaled)
+if (qs.get('creases') === 'off') renderer.look.creases = 0;
+if (qs.get('unfold') === 'show') renderer.look.unfold = 1;
 // (the fencers wear the jacket drafted and settled by devtools/piste-jacket.mjs; `jacket=loft`: the lofted one it replaced)
 // (dressed before anything runs, so a still's cloth has the same history in either jacket)
 const dressed: Promise<void> = (() => {
@@ -140,6 +147,15 @@ const fovOf = () => {
 };
 function view(b: Bout): View {
   const [me, op] = b.fencers, fov = fovOf();
+  // (\`armcam=angle,dist\`: close on the near fencer's weapon arm, from an angle (degrees, round from their right side,
+  // toward the front), for judging the sleeve)
+  if (qs.has('armcam')) {
+    const [deg, dist] = (qs.get('armcam') ?? '').split(',').map(Number), a = ((deg || 0) * Math.PI) / 180, d = dist || 1.1;
+    const at = madd(lerp(me.capsules[0].b, me.blade.guard, 0.5), [0, 0, 0], 0); at[1] -= 0.05;
+    const dir = madd(me.frame.r.map((v) => v * Math.cos(a)) as V, me.frame.f, Math.sin(a));
+    const eye = madd(at, dir, d); eye[1] += 0.12;
+    return { eye, at, fov: 0.75, self: -1 };
+  }
   if (clothStudy) {
     const at = madd(op.frame.o, op.frame.f, 0.20);
     at[1] = 1.24;
@@ -504,7 +520,7 @@ function frame(now: number) {
   scoreboard(replay ? replay.r.bout : bout);
   renderer.resize(Math.min(devicePixelRatio || 1, 2));
   const shown = replay ? replayView(replay.r.bout) : view(bout);
-  renderer.draw(replay ? replay.r.bout : bout, { ...(watchable() ? byHand(shown) : shown), clay, bodies });
+  renderer.draw(replay ? replay.r.bout : bout, { ...(watchable() || qs.has('orbit') ? byHand(shown) : shown), clay, bodies });
   marks();
   lessonHud();
   frames++;
@@ -523,6 +539,7 @@ function publish() {
     drive: (i: Intent | null) => { driven = i; },
     begin: () => runner?.begin(),
     startReplay: (from: number, to: number) => startReplay(from, to, to),
+    clothProbe: () => renderer.cloth?.probe(bout.fencers[0]) ?? null,
   };
 }
 dressed.then(() => { runOn(); requestAnimationFrame(frame); });

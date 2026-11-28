@@ -20,13 +20,16 @@ const R = ROOM;
 export const MAIN_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
 uniform mat4 vp; uniform mat4 lvp;
-out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas; out vec2 vStrain;
-void main(){ vStrain = vec2(1.0); vP = p; vN = n; vC = c.rgb; vM = c.a; vT = t; vAtlas = vec2(-1.0); vL = lvp * vec4(p, 1.0); gl_Position = vp * vec4(p, 1.0); }`;
+out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas; out vec3 vStrain;
+void main(){ vStrain = vec3(1.0, 1.0, 0.0); vP = p; vN = n; vC = c.rgb; vM = c.a; vT = t; vAtlas = vec2(-1.0); vL = lvp * vec4(p, 1.0); gl_Position = vp * vec4(p, 1.0); }`;
 
 export const MAIN_FS = `#version 300 es
 precision highp float;
 precision highp sampler2DShadow;
-in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL; in vec2 vT; in vec2 vAtlas; in vec2 vStrain; uniform sampler2D kitAtlas;
+in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL; in vec2 vT; in vec2 vAtlas; in vec3 vStrain; uniform sampler2D kitAtlas;
+// (look.x: the drawn creases on (1) or off (0), for judging the cloth's own folds; look.y: show where the solver took
+// the cloth as folded over (red), 'unfold=show')
+uniform vec2 look;
 uniform vec3 eye; uniform vec3 sunDir; uniform sampler2DShadow shadow; uniform float exposure; uniform float clay; uniform float alpha;
 uniform vec4 feet[4]; uniform vec4 tips[2]; uniform vec3 bladeA[2]; uniform vec3 bladeB[2];
 out vec4 o;
@@ -215,19 +218,20 @@ void main(){
     float ridge2 = 1.0 - abs(vnoise(cq2) * 2.0 - 1.0);
     float bunchAlong = smoothstep(1.01, 0.88, vStrain.y), bunchAcross = smoothstep(1.01, 0.88, vStrain.x);
     float taut = smoothstep(1.0, 1.04, max(vStrain.x, vStrain.y));
-    float crease = (ridge * ridge * (0.25 * patchy + 1.1 * bunchAlong) + ridge2 * ridge2 * 1.1 * bunchAcross) * 0.0016 * (1.0 - taut);
+    float crease = (ridge * ridge * (0.25 * patchy + 1.1 * bunchAlong) + ridge2 * ridge2 * 1.1 * bunchAcross) * 0.0016 * (1.0 - taut) * look.x;
     patchy = clamp(0.25 * patchy + bunchAlong + bunchAcross, 0.0, 1.0) * (1.0 - taut);
     // (smooth: stitches stepped into it lit up, edge on, as a row of teeth; they show in its colour only)
     float welt = 0.0007 * (1.0 - smoothstep(0.0, 0.006, seamD));
     N = bump(N, rib + slub + crease + welt);
     // (a crease's valley a little shut in, its ridge a little lit: the light alone doesn't make it read at a distance)
-    alb *= 1.0 - 0.08 * patchy * (1.0 - ridge);
+    alb *= 1.0 - 0.08 * patchy * (1.0 - ridge) * look.x;
     // the seam: a narrow darker line, stitched
     // (a fine line, faint: a seam reads by its welt catching the light more than by its colour)
     float sl = (1.0 - smoothstep(0.0007, 0.002, seamD)), st = step(0.5, fract(vT.y * 110.0));
     alb *= 1.0 - sl * (0.05 + 0.025 * st);
     // folds and contact: darker and cooler where it's shut in
     alb *= shade; alb = mix(alb * vec3(0.86, 0.9, 1.04), alb, shade);
+    if (look.y > 0.0) alb = mix(alb, vec3(0.9, 0.05, 0.05), clamp(vStrain.z * 3.0, 0.0, 1.0));
     if (vAtlas.x >= 0.5) {
       vec3 panel = texture(kitAtlas,vAtlas).rgb;
       alb *= clamp(pow(panel,vec3(1.6))*1.8,0.27,1.4);
@@ -343,8 +347,8 @@ layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) i
 layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex; layout(location=7) in vec2 panelUV;
 uniform mat4 vp; uniform mat4 lvp; uniform mat4 bones[15];
 ${FOLD_INPUTS}
-out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas; out vec2 vStrain;
-vec2 clothStrain = vec2(1.0);
+out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT; out vec2 vAtlas; out vec3 vStrain;
+vec2 clothStrain = vec2(1.0); float clothUnfold = 0.0;
 void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
   float load = foldLoad[int(foldDelta.w)];
@@ -352,14 +356,14 @@ void main(){
   vec3 q = dressedPosition(M,load,nn);
   float g = ex.z > 0.0 ? ex.z * bend.x : -ex.z * bend.y;
   vC = c.rgb; if (c.a > 14.5 && c.a < 15.5) vC.r *= 1.0 - 0.38 * g;
-  vP = q; vN = nn; vM = c.a; vT = t; vAtlas = panelUV; vL = lvp * vec4(q, 1.0); vStrain = clothStrain;
+  vP = q; vN = nn; vM = c.a; vT = t; vAtlas = panelUV; vL = lvp * vec4(q, 1.0); vStrain = vec3(clothStrain, clothUnfold);
   gl_Position = vp * vec4(q, 1.0);
 }`;
 export const SKIN_SHADOW_VS = `#version 300 es
 layout(location=0) in vec3 p; layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex;
 layout(location=1) in vec3 n; uniform mat4 lvp; uniform mat4 bones[15];
 ${FOLD_INPUTS}
-vec2 clothStrain = vec2(1.0);
+vec2 clothStrain = vec2(1.0); float clothUnfold = 0.0;
 void main(){
   mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
   float load = foldLoad[int(foldDelta.w)];
