@@ -36,6 +36,8 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
   // (the kit's fabric (cloth.ts): bending as the cube of its bending length, from the 0.12 it was set at for a 3 cm cloth)
   const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 * (FABRIC.bendingLength / 0.03) ** 3 };
   const STEP = 0.005;
+  // (the collar interfaced: it holds its shape in bending, as stiff as it holds its length)
+  const stiff = G.pieces.map((pc) => pc.kind === 'collar');
   const fab = o.mode === 'fab';
   const h = fab ? 1 / 960 : 1 / 240, steps = Math.round((o.seconds ?? (fab ? 3 : 6)) / h), thick = o.thick ?? 0.004;
   // (Fab's pins: a few inside each piece, clear of its edges, held where it was laid while the seams close (1.1 s), then
@@ -64,7 +66,7 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
       for (const e of edges) {
         const a = e.a * 3, b = e.b * 3, dx = x[b] - x[a], dy = x[b + 1] - x[a + 1], dz = x[b + 2] - x[a + 2], l = Math.hypot(dx, dy, dz);
         if (l < 1e-9) continue;
-        const c = (k[e.dir] * 0.5 * (l - e.rest)) / l;
+        const c = ((stiff[e.piece] && e.dir === 'bend' ? 1 : k[e.dir]) * 0.5 * (l - e.rest)) / l;
         x[a] += dx * c; x[a + 1] += dy * c; x[a + 2] += dz * c; x[b] -= dx * c; x[b + 1] -= dy * c; x[b + 2] -= dz * c;
       }
       for (const st of G.stitches) {
@@ -79,7 +81,7 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
         const a = tie.p * 3, dx = x[a] - tie.at[0], dy = x[a + 1] - tie.at[1], dz = x[a + 2] - tie.at[2], l = Math.hypot(dx, dy, dz);
         if (l > tie.len) { const m = tie.len / l; x[a] = tie.at[0] + dx * m; x[a + 1] = tie.at[1] + dy * m; x[a + 2] = tie.at[2] + dz * m; }
       }
-      if (!o.free) for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
+      if (!o.free) for (const pn of G.pins ?? []) { if (pn.level) { x[pn.p * 3] = pn.at[0]; x[pn.p * 3 + 2] = pn.at[2]; } else x.set(pn.at, pn.p * 3); }
       if (pw > 0) pinIds.forEach((i, k) => { for (let a = 0; a < 3; a++) x[i * 3 + a] += (pinAt[k][a] - x[i * 3 + a]) * 0.6 * pw; });
       // the body (look/body.ts): out of it, a little off it, the friction as below (the jacket's body out of the trunk
       // and thighs: an arm by the side is in its sleeve, outside the body of the jacket)

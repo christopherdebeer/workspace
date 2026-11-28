@@ -129,7 +129,7 @@ export interface Piece { name: string; rows: number; cols: number; flat: [number
 /** a stitch: point p sewn to the place between q and q2 (t of the way) */
 export interface Stitch { p: number; q: number; q2: number; t: number; /** which seam it's part of */ seam?: string }
 /** a point held at a place (a cuff under the glove's gauntlet) */
-export interface Pin { p: number; at: V }
+export interface Pin { p: number; at: V; /** held round, not up and down: free to rise and fall */ level?: boolean }
 /** a point kept no further than a length from a place (the crotch strap: the hem in front and behind, held to where the
  * strap passes under the crotch) */
 export interface Tie { p: number; at: V; len: number }
@@ -362,10 +362,20 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       return madd(c0, dir, Math.max(0.05, lo) + 0.008);
     };
     const lower: V[] = [], upper: V[] = [];
+    for (let c = 0; c < CC; c++) { const [qa, qb, t] = along((c / (CC - 1)) * neckLen); lower.push(add(scale(atAll[qa], 1 - t), scale(atAll[qb], t))); }
+    // (the upper edge round the neck evenly by its own length, from the fastening at the front, the way the neckline goes
+    // round: straight up from each neckline point they'd bunch where the neckline does)
+    const angOf = (q: V) => Math.atan2(q[2] - centre[2], q[0] - centre[0]);
+    const a0 = angOf(lower[0]), turn = (q: V) => { let d = angOf(q) - a0; while (d < 0) d += Math.PI * 2; return d; };
+    const sense = turn(lower[Math.floor(CC / 4)]) < Math.PI ? 1 : -1, yTop = lower.reduce((m, q) => m + q[1], 0) / CC + HIGH;
+    const ring: V[] = Array.from({ length: 181 }, (_, k) => { const a = a0 + sense * (k / 180) * Math.PI * 2; return neckOut(yTop, [Math.cos(a), 0, Math.sin(a)]); });
+    const rl = [0]; for (let k = 1; k < ring.length; k++) rl.push(rl[k - 1] + len(sub(ring[k], ring[k - 1])));
     for (let c = 0; c < CC; c++) {
-      const [qa, qb, t] = along((c / (CC - 1)) * neckLen), b0 = add(scale(atAll[qa], 1 - t), scale(atAll[qb], t));
-      const dir = norm(sub([b0[0], 0, b0[2]], [centre[0], 0, centre[2]]));
-      lower.push(b0); upper.push(neckOut(b0[1] + HIGH, dir));
+      const want = (c / (CC - 1)) * rl[180]; let k = 0; while (k < 179 && rl[k + 1] < want) k++;
+      const t = (want - rl[k]) / Math.max(1e-9, rl[k + 1] - rl[k]), q = add(scale(ring[k], 1 - t), scale(ring[k + 1], t));
+      // (at its own column's height, the neck measured there: the band stands its full height above where it's sewn)
+      const a = Math.atan2(q[2] - centre[2], q[0] - centre[0]);
+      upper.push(neckOut(lower[c][1] + HIGH, [Math.cos(a), 0, Math.sin(a)]));
     }
     // (its two ends fastened at the front: their upper points one)
     { const mid = scale(add(upper[0], upper[CC - 1]), 0.5); upper[0] = mid; upper[CC - 1] = mid; }
@@ -388,7 +398,8 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     // (interfaced, it stands: held where it's laid above its seam)
     // (its upper rows; the row above the seam left to follow the neckline; both ends held, together)
     // (its top row held, the band below it free to follow the neckline: held stiffly, the two tore at each other)
-    for (let c = 0; c < CC; c++) pins.push({ p: n + (CR - 1) * CC + c, at: piece.at[(CR - 1) * CC + c] });
+    // (round the neck, not at a height: it rises and falls with the neckline, the band standing its own height above it)
+    for (let c = 0; c < CC; c++) pins.push({ p: n + (CR - 1) * CC + c, at: piece.at[(CR - 1) * CC + c], level: true });
     n += CR * CC;
   }
   // the crotch strap: the centre front's hem to the centre back's, under the crotch (a little below the hem between the
