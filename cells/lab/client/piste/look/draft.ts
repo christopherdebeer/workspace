@@ -35,6 +35,9 @@ export interface JacketPattern {
   widths: Record<Quarter, number[]>;
   /** the underarm's height above the hem; the shoulder's drop to its point; the neck's half-width; its depth in front and behind */
   armhole: number; drop: number; neckW: number; neckFront: number; neckBack: number;
+  /** the hem's shape: how far it rises at the side seams, over the hips (m), and drops at the centre front and back to the
+   * point the crotch strap holds between the legs (m): a fencing jacket's, cut away at the sides to lunge in */
+  hemSide?: number; hemPoint?: number;
   /** the shoulder point: its distance from the centre, along the shoulder, m */
   shoulderW: number;
   /** each sleeve: its round at stations from the cap (0) to the cuff (1), its length, and the cap's ease into the armhole */
@@ -94,7 +97,7 @@ export function draftJacket(B: Body): JacketPattern {
     length, stations, widths: { FW: [...q], FR: [...q], BW: [...q], BR: [...q] },
     // (over the shoulder: the trunk's depth there, front and behind, is climbed to the seam on top)
     lengths: (() => { const S = slice(B, B.shoulder[1] - 0.05), fr = S.radius(scale(B.r, -1)), bk = S.radius(B.r); return { FW: length + fr, FR: length + fr, BW: length + bk, BR: length + bk }; })(),
-    armhole: (B.shoulder[1] - 0.15) - hem, drop: 0.045, neckW: 0.075, neckFront: 0.085, neckBack: 0.025,
+    armhole: (B.shoulder[1] - 0.15) - hem, drop: 0.045, neckW: 0.075, neckFront: 0.085, neckBack: 0.025, hemSide: 0.09, hemPoint: 0.05,
     shoulderW: 0.19,
     // (the rear sleeve's cuff fitted to the bare wrist, 21 cm round (the weapon's goes into the glove's gauntlet))
     // (the weapon sleeve cut bent, as a fencing jacket's is, for the arm in guard: a straight tube round a bent arm has
@@ -161,6 +164,8 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
       for (let c = 0; c < COLS; c++) {
         const x = xl + (xr - xl) * (c / (COLS - 1));
         const y = v - P.drop * (c / (COLS - 1)) * sArm * sArm;
+        // (the hem: up at the side seam, down to a point at the centre, the curve fading out toward the underarm)
+        const cf = c / (COLS - 1), hemShape = ((P.hemSide ?? 0) * cf ** 2.2 - (P.hemPoint ?? 0) * (1 - cf) ** 2) * Math.max(0, 1 - v / P.armhole);
         // (the climb over the shoulder is deep at the neck, where the chest is, and shallow at the shoulder point: the extra
         // length tapers across the panel, so it doesn't make the armhole deeper)
         // (both sides of a shoulder seam slope alike, so its two edges are the same length: the one that climbs further keeps
@@ -168,10 +173,10 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
         const Lf = P.lengths?.[`F${qn[1]}` as Quarter] ?? P.length, Lb = P.lengths?.[`B${qn[1]}` as Quarter] ?? P.length;
         const slope = 0.8 * Math.min(Lf - P.length, Lb - P.length) / Math.max(1e-6, Lq - P.length);
         const climb = 1 - Math.min(0.8, slope) * (c / (COLS - 1)), vCol = v + (vPaper - v) * climb;
-        piece.flat.push([x, vCol - P.drop * (c / (COLS - 1)) * sArm * sArm]);
+        piece.flat.push([x, vCol - P.drop * (c / (COLS - 1)) * sArm * sArm + hemShape]);
         // (laid round the body: its angle from the centre in proportion to the quarter's width there)
         // (laid at its height on the paper, up to the top of the body; what's beyond that climbs over the shoulder)
-        const yLay = Math.min(vPaper, P.length) - P.drop * (c / (COLS - 1)) * sArm * sArm;
+        const yLay = Math.min(vPaper, P.length) - P.drop * (c / (COLS - 1)) * sArm * sArm + hemShape;
         const S = slice(B, hem + yLay), theta = (Math.PI / 2) * Math.min(1.05, x / Math.max(0.05, interp(P.stations, W, Math.min(v, P.armhole))));
         const dir = norm(add(scale(B.r, front ? -Math.cos(theta) : Math.cos(theta)), scale(B.f, side * Math.sin(theta))));
         // (what the quarter has beyond the block's height climbs over the shoulder: its front or back reach drawn in
@@ -210,7 +215,9 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     const armholeLen = L[L.length - 1]; armholes[s] = armholeLen;
     // the cap: as wide as the sleeve's round just below it; its height solved (bisection) so the curve across its top
     // is the armhole's length and the cap's ease, the crown opposite the underarm seam (Fab's sleeve head)
-    const round = S.round.map((x, k) => (k === 0 ? S.round[1] * 1.02 : x));
+    // (the cap cut wide and so flat, as a fencing sleeve's is, to reach: 14 % over the arm's round below it; its height
+    // is what gives it the armhole's length)
+    const round = S.round.map((x, k) => (k === 0 ? S.round[1] * 1.14 : x));
     // (drafted to its own armhole: its front half to the armhole's front edge and its back half to the back's, each with
     // the ease; the height and where the crown falls across the sleeve solved together. The front's edge is the longer,
     // so the crown sits back of the middle, as a sleeve head's does)
@@ -353,7 +360,8 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     for (let c = 0; c < CC; c++) { const [qa, qb, t] = along((c / (CC - 1)) * neckLen); stitches.push({ p: n + c, q: qa, q2: qb, t, seam: 'collar' }); }
     for (let r = 1; r < CR; r++) pair(n + r * CC + CC - 1, n + r * CC, 'collar fastening');
     // (interfaced, it stands: held where it's laid above its seam)
-    for (let r = 1; r < CR; r++) for (let c = 0; c < CC - 1; c++) pins.push({ p: n + r * CC + c, at: piece.at[r * CC + c] });
+    // (its upper rows; the row above the seam left to follow the neckline; both ends held, together)
+    for (let r = 2; r < CR; r++) for (let c = 0; c < CC; c++) pins.push({ p: n + r * CC + c, at: piece.at[r * CC + c] });
     n += CR * CC;
   }
   // the crotch strap: the centre front's hem to the centre back's, under the crotch (a little below the hem between the

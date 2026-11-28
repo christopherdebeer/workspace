@@ -150,7 +150,8 @@ export function meshBreeches(P: BreechesPattern, f: Fencer, body: Bare, base = 0
         const yRise = rise + (P.side - rise) * cf;
         // (over the knee: the front longer down its middle, the back a little shorter behind it, as a knee bent in guard
         // needs; nothing at the seams, so they stay the same length)
-        const kneeU = (legLen - 0.07) / legLen, bendK = above ? 0 : smoothstep((u - (kneeU - 0.18)) / 0.22) * Math.sin(Math.PI * cf) ** 2;
+        // (the extra length over the kneecap only, taken back in below it: the hem straight into the band)
+        const kneeU = (legLen - 0.07) / legLen, bendK = above ? 0 : smoothstep((u - (kneeU - 0.2)) / 0.16) * (1 - smoothstep((u - (kneeU + 0.01)) / (1 - kneeU - 0.01))) * Math.sin(Math.PI * cf) ** 2;
         const y = above ? u * yRise : yRise + u * legLen + bendK * P.kneeBend * (back ? -0.4 : 1);
         piece.flat.push([-(1 - cf) * width, y]);
         // laid: above the crotch round the hips, from the centre to the side; below round the thigh, from its inside
