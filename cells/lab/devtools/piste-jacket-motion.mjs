@@ -26,7 +26,8 @@ function checkPose(fencer) {
   for (const panel of panels) {
     // Adjacent cloth anchors cannot separate by a forearm's length. Allow local elbow stretch.
     // (except where a sleeve meets the body under the arm: as the arm rises the armpit opens, and the cloth there is
-    // stretched across it, by up to 9 cm, until a gusset gives it cloth of its own)
+    // stretched across it, by up to 9 cm: the gusset gives the simulated cloth its own there, but the skeleton still
+    // carries the points it's sewn between apart)
     const limit = panel.kind === 'jacket' ? 0.025 : 0.05, armpit = 0.09;
     for (let r = 0; r < panel.R; r++) for (let c = 0; c < panel.J; c++) {
       const i = panel.base - base + r * panel.J + c;

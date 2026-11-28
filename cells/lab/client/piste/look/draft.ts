@@ -351,12 +351,33 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     const along = (want: number): [number, number, number] => { let k = 0; while (k < Ls.length - 2 && Ls[k + 1] < want) k++; return [loopIds[k], loopIds[k + 1], (want - Ls[k]) / Math.max(1e-9, Ls[k + 1] - Ls[k])]; };
     // (round the neck: the middle of the two shoulder joints, which is on the trunk's axis)
     const centre = scale(add(B.shoulder, B.rearShoulder), 0.5);
+    // the upper edge, measured on the neck itself: for each column, straight up from where it's sewn by the band's height,
+    // then in to the neck's own surface there and a little off it (its wearing ease): a ring round the actual neck. Its
+    // length is the upper edge's, not one taken from where the panels happened to be laid
+    const neckOut = (y: number, dir: V) => {
+      // (the trunk alone, the neck's own surface: not the shoulders and arms either side of it, from 12 cm in)
+      const c0: V = [centre[0], y, centre[2]], inside = (q: V) => (B.dist ?? ((pp: V) => clearance(pp, B.trunk)))(q) < 0;
+      let lo = 0, hi = 0.12; for (let m = hi; m > 0; m -= 0.004) if (inside(madd(c0, dir, m))) { lo = m; hi = m + 0.004; break; }
+      for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (inside(madd(c0, dir, m))) lo = m; else hi = m; }
+      return madd(c0, dir, Math.max(0.05, lo) + 0.008);
+    };
+    const lower: V[] = [], upper: V[] = [];
+    for (let c = 0; c < CC; c++) {
+      const [qa, qb, t] = along((c / (CC - 1)) * neckLen), b0 = add(scale(atAll[qa], 1 - t), scale(atAll[qb], t));
+      const dir = norm(sub([b0[0], 0, b0[2]], [centre[0], 0, centre[2]]));
+      lower.push(b0); upper.push(neckOut(b0[1] + HIGH, dir));
+    }
+    // (its two ends fastened at the front: their upper points one)
+    { const mid = scale(add(upper[0], upper[CC - 1]), 0.5); upper[0] = mid; upper[CC - 1] = mid; }
+    const upperLen = upper.slice(1).reduce((a, q, k) => a + len(sub(q, upper[k])), 0);
+    // the paper: the lower edge the neckline's length, the upper the neck's; where they differ the band is cut curved (a
+    // ring's sector: the shorter edge on the inside), so both hold
+    const theta = Math.abs(neckLen - upperLen) / HIGH, R = theta > 1e-3 ? neckLen / theta : 0, sgn = upperLen < neckLen ? 1 : -1;
     for (let r = 0; r < CR; r++) for (let c = 0; c < CC; c++) {
-      const want = (c / (CC - 1)) * neckLen, [qa, qb, t] = along(want), base0 = add(scale(atAll[qa], 1 - t), scale(atAll[qb], t));
-      const toNeck = norm(sub([centre[0], base0[1], centre[2]], base0)), u = r / (CR - 1);
-      // (the band a little shorter at its top edge, so it stands in close round the neck)
-      piece.flat.push([want * (1 - 0.03 * u), u * HIGH]);
-      piece.at.push(madd(madd(base0, [0, 1, 0], u * HIGH), toNeck, u * 0.005));
+      const u = r / (CR - 1), f = c / (CC - 1);
+      if (R > 0) { const phi = (f - 0.5) * theta, rr = R - sgn * u * HIGH; piece.flat.push([rr * Math.sin(phi), sgn * (R - rr * Math.cos(phi))]); }
+      else piece.flat.push([f * neckLen, u * HIGH]);
+      piece.at.push(add(scale(lower[c], 1 - u), scale(upper[c], u)));
     }
     // (its two ends laid together where they're fastened: held where it's laid, apart they could never close)
     for (let r = 0; r < CR; r++) { const i0 = r * CC, i1 = r * CC + CC - 1, mid = scale(add(piece.at[i0], piece.at[i1]), 0.5);
