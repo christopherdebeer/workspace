@@ -8,6 +8,9 @@
 import type { Blade } from './blade';
 import type { Capsule } from './fencer';
 import type { Part } from './weapons';
+/** a body's surface near a point: how far outside it (m), which way is out, what part it is, and how far off it the kit
+ * lies there (the cloth, the mask, the glove) */
+export type Surface = (p: V) => { d: number; normal: V; part: Part | null; lie: number };
 import { type V, dot, norm, sub } from './v3';
 
 // closest points between segments (p1,q1) and (p2,q2), flat: results in S, T, D2
@@ -172,14 +175,27 @@ export interface TipContact {
  * flesh under it, stiffness `tipK`), solved as XPBD so the force it makes is a real force: that force along the
  * blade's axis is what the button feels. The rest of the blade just can't go into the body.
  */
-export function bodyContact(blade: Blade, body: Capsule[], h: number, out: TipContact) {
+export function bodyContact(blade: Blade, body: Capsule[], h: number, out: TipContact, surface?: Surface | null) {
   out.part = null; out.axial = 0; out.force = 0;
   const n = blade.n, tip = n - 1;
+  // the tip, on the body's own surface where it's given (look/body.ts: the anatomy, and the kit's thickness over it)
+  if (surface) {
+    const q = tip * 3, s2 = surface([blade.x[q], blade.x[q + 1], blade.x[q + 2]]);
+    const pen = s2.lie + blade.r[tip] - s2.d;
+    if (s2.part && pen > 0) {
+      const [nx, ny, nz] = s2.normal, w = blade.w[tip], at = 1 / (blade.weapon.tipK * h * h);
+      const lam = pen / (w + at);
+      push(blade.x, tip, nx, ny, nz, lam * w);
+      const F = lam / (h * h), ax = blade.tipAxis, along = -(ax[0] * nx + ax[1] * ny + ax[2] * nz);
+      tipFriction(blade, tip, nx, ny, nz, lam * w);
+      out.force = F; out.axial = Math.max(0, F * along); out.part = s2.part;
+    }
+  }
   for (const c of body) {
     if (!capsuleNear(blade, c)) continue;
     const cap = [...c.a, ...c.b];
-    // the tip
-    {
+    // the tip (on the capsules, where there's no body's surface to meet)
+    if (!surface) {
       const q = tip * 3;
       closest(blade.x, q, q, cap as unknown as V, 0, 3);
       const t = T, d = Math.sqrt(D2), rc = c.ra + (c.rb - c.ra) * t, pen = rc + blade.r[tip] - d;
@@ -201,6 +217,9 @@ export function bodyContact(blade: Blade, body: Capsule[], h: number, out: TipCo
       closest(blade.x, k * 3, k * 3 + 3, cap as unknown as V, 0, 3);
       const s = S, t = T, d = Math.sqrt(D2);
       if (k === n - 2 && s > 0.85) continue;
+      // (the last few centimetres before the tip meet the body's surface with it, not the capsules, which stand further
+      // out in places: they'd hold the tip off the body it's meant to reach)
+      if (surface && k >= n - 3) continue;
       const rc = c.ra + (c.rb - c.ra) * t, pen = rc + blade.r[k] - d;
       if (pen <= 0 || d < 1e-9) continue;
       const pa: V = [0, 0, 0];

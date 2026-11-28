@@ -150,8 +150,8 @@ export function bareBody(f: Fencer): Body {
  * to the surface plus the thickness.
  */
 const BALLS = new WeakMap<Part, { c: V; r: number }>();
-export function nearSurface(body: Body, p: V): { d: number; surface: V; normal: V } {
-  let best = { d: Infinity, surface: p, normal: [0, 1, 0] as V };
+export function nearSurface(body: Body, p: V): { d: number; surface: V; normal: V; part: Part | null } {
+  let best = { d: Infinity, surface: p, normal: [0, 1, 0] as V, part: null as Part | null };
   for (const part of body.parts) {
     const S = part.sections;
     // (a part whose bounding ball is further than the nearest found so far can't be nearer)
@@ -171,7 +171,7 @@ export function nearSurface(body: Body, p: V): { d: number; surface: V; normal: 
       const along = (t0 - t) * Math.sqrt(L2), dist = along === 0 ? rho - R : Math.hypot(Math.max(0, rho - R), along);
       if (dist < best.d) {
         const dir = norm(add(scale(u, x), scale(w, y)));
-        best = { d: dist, surface: madd(cc, dir, R), normal: dir };
+        best = { d: dist, surface: madd(cc, dir, R), normal: dir, part };
       }
     }
   }

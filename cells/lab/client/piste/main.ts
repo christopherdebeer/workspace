@@ -68,7 +68,7 @@ if (readout) body.classList.add('readout');
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = document.querySelector('canvas')!;
 // (the ceremony: before the bout, between touches and after it; `ceremony=0` puts them straight back on their lines)
-const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study, ceremony: (mode === 'bout' || mode === 'menu') && pick('ceremony') !== '0' && pick('ceremony') !== 'off', warmup: mode === 'bout' && !auto && !study });
+const bout = new Bout({ touch: qs.get('touch') === 'body' ? 'body' : 'capsules', weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study, ceremony: (mode === 'bout' || mode === 'menu') && pick('ceremony') !== '0' && pick('ceremony') !== 'off', warmup: mode === 'bout' && !auto && !study });
 /** the study's script, by the bout's clock (it loops every six seconds) */
 const STUDY = { step: 0.9, roll: [2.0, 2.8] as [number, number], rollTo: 0.6, loop: 6 };
 const studyClock = () => bout.t % STUDY.loop;

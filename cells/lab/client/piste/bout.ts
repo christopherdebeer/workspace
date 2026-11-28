@@ -10,7 +10,8 @@
 import { Fencer, BODY } from './fencer';
 import { Ceremony } from './ceremony';
 import { Box, award, type Light } from './box';
-import { BladePair, bodyContact, floorContact, guardContact, type ContactStats, type TipContact } from './contact';
+import { BladePair, bodyContact, floorContact, guardContact, type ContactStats, type Surface, type TipContact } from './contact';
+import { bareBody, nearSurface, type Body } from './look/body';
 import type { Weapon } from './weapons';
 import type { V } from './v3';
 
@@ -34,6 +35,9 @@ export type BoutEvent =
 
 export interface Options {
   weapon: Weapon; to: number;
+  /** where a tip touches: the contact capsules (as the bout's lessons and opponent are tuned to), or the undressed body's
+   * own surface and the kit's thickness over it (look/body.ts; `touch=body`: on trial) */
+  touch?: 'capsules' | 'body';
   /** a referee (allez, halt, the score, en garde). Without one (a lesson), whoever runs the bout places the fencers and
    * reads the box, and the bout is always fencing. */
   referee?: boolean;
@@ -98,6 +102,32 @@ export class Bout {
     return n;
   }
 
+  /** fencer `i`'s surface for a tip at `tip`, if it's within a few centimetres (else null: the capsules do) */
+  private surfaceOf(i: 0 | 1, tip: V): Surface | null {
+    const f = this.fencers[i];
+    let near = false;
+    for (const c of f.capsules) {
+      const ab = [c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]], ap = [tip[0] - c.a[0], tip[1] - c.a[1], tip[2] - c.a[2]];
+      const t = Math.max(0, Math.min(1, (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / Math.max(1e-12, ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2)));
+      const d = Math.hypot(ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t) - Math.max(c.ra, c.rb);
+      if (d < 0.06) { near = true; break; }
+    }
+    if (!near) return null;
+    // (built afresh for this substep, from the pose now: only while a tip is this near, which is a touch's few dozen
+    // substeps; nothing kept, so a replay's copy of the bout meets exactly the same body)
+    const body: Body = bareBody(f);
+    return (p) => {
+      const q = nearSurface(body, p), pt = q.part;
+      // (what's there, and how far off the body the kit lies over it: the mask stands off the head, the glove and the
+      // shoe are close, the jacket and the breeches a centimetre or so)
+      const part = !pt ? null : pt.name.startsWith('hand') ? 'hand' : pt.name.startsWith('foot') ? 'foot' : pt.region === 'head' ? 'head' : pt.region === 'leg' ? 'leg' : pt.region === 'torso' ? 'torso' : 'arm';
+      // (the mask's cage stands well off the face; the glove's gauntlet over the forearm; the jacket and the plastron under
+      // it over the trunk; the breeches; the shoe's upper)
+      const lie = part === 'head' ? 0.045 : part === 'hand' ? 0.012 : part === 'foot' ? 0.015 : part === 'torso' ? 0.012 : part === 'leg' ? 0.01 : pt && pt.name.startsWith('forearm') ? 0.02 : 0.01;
+      return { d: q.d, normal: q.normal, part, lie };
+    };
+  }
+
   drain(): BoutEvent[] { const e = this.events; this.events = []; return e; }
   /** forget the tips' peak force (whoever reads it) */
   resetPeak() { this.peak = [0, 0]; }
@@ -119,8 +149,9 @@ export class Bout {
     for (const f of this.fencers) f.blade.solve(h);
     this.pair.solve(this.clash);
     const g0 = guardContact(A.blade, B.blade), g1 = guardContact(B.blade, A.blade);
-    bodyContact(A.blade, B.capsules, h, this.tips[0]);
-    bodyContact(B.blade, A.capsules, h, this.tips[1]);
+    const onBody = this.opts.touch === 'body';
+    bodyContact(A.blade, B.capsules, h, this.tips[0], onBody ? this.surfaceOf(1, A.blade.tip) : null);
+    bodyContact(B.blade, A.capsules, h, this.tips[1], onBody ? this.surfaceOf(0, B.blade.tip) : null);
     for (const f of this.fencers) floorContact(f.blade);
     // (once more for the blades' own lengths: the contacts pushed nodes about)
     for (const f of this.fencers) f.blade.solve(h);
