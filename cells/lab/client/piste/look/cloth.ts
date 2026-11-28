@@ -128,6 +128,7 @@ const SOLVE_FS = HEAD + `
 uniform sampler2D X, MetaA, MetaB, Rest0, Rest1, Rest2, A0, A1, N0, N1, Seam, SeamB; uniform float s, kStretch, kShear, kBend, omega, kThick, kUnfold;
 /** the arms (upper and fore, each side: a, b, radius), for the jacket's body to lie against */
 uniform vec4 armA[4], armB[4];
+const float LAYER = ${(2 * FABRIC.thickness + 0.009).toFixed(4)};
 out vec4 o;
 int r, c, R, S, off; bool open; vec3 x, acc; float n;
 /** (a closed piece wraps round; an open one (a flat pattern piece) has edges) */
@@ -136,6 +137,9 @@ int col(int cc){ return open ? clamp(cc, 0, S - 1) : (cc + S) % S; }
 vec3 at(int rr, int cc){ return texelFetch(X, tc(off + rr * S + col(cc)), 0).xyz; }
 vec3 anchorAt(int rr, int cc){ ivec2 t = tc(off + rr * S + col(cc)); return mix(texelFetch(A0, t, 0).xyz, texelFetch(A1, t, 0).xyz, s); }
 void pull(vec3 xj, float L, float k){ if (L <= 0.0) return; vec3 d = x - xj; float l = length(d); if (l < 1e-7) return; acc -= 0.5 * k * (l - L) * d / l; n += 1.0; }
+/** (cloth on cloth: the nearest of the under layer's points, among one and its four neighbours on its grid) */
+vec3 ubest; int ubi; float ubd;
+void ucand(int k, bool ok){ if (!ok) return; vec3 q = texelFetch(X, tc(k), 0).xyz; float d = dot(x - q, x - q); if (d < ubd) { ubd = d; ubest = q; ubi = k; } }
 void rel(int dr, int dc, float L, float k){ int rr = r + dr; if (rr < 0 || rr >= R || L <= 0.0 || !okc(c + dc)) return; pull(at(rr, c + dc), L, k); }
 void main(){
   int i = me(); if (i >= N) { o = vec4(0); return; }
@@ -178,6 +182,18 @@ void main(){
     vec3 m = cross(xU - xD, xR - xL), mA = cross(aU - aD, aR - aL);
     float agree = dot(m, mA) / max(1e-12, length(m) * length(mA));
     if (agree < 0.3) x = mix(x, sheet, kUnfold * clamp((0.3 - agree) / 0.6, 0.0, 1.0));
+  }
+  // cloth on cloth: the jacket over the breeches. Its point kept outside the breeches' surface where they are now (the
+  // nearest of the point found under it at rest and that point's four neighbours, the plane through it facing the way
+  // the body does there), two thicknesses and a little off: the outer layer gives, the inner one's held by the body
+  if (sw.w >= 0.0) {
+    int u = int(sw.w); vec4 um = texelFetch(MetaA, tc(u), 0);
+    int ur = int(um.x), uc = int(um.y), uR = int(um.z), uS = int(abs(um.w));
+    ubest = texelFetch(X, tc(u), 0).xyz; ubi = u; ubd = dot(x - ubest, x - ubest);
+    ucand(u + 1, uc + 1 < uS); ucand(u - 1, uc > 0); ucand(u + uS, ur + 1 < uR); ucand(u - uS, ur > 0);
+    vec3 un = normalize(mix(texelFetch(N0, tc(ubi), 0).xyz, texelFetch(N1, tc(ubi), 0).xyz, s));
+    float dn = dot(x - ubest, un);
+    if (ubd < 0.0036 && dn < LAYER) x += (LAYER - dn) * un;
   }
   // the body: within the ease of its place on the skin, and never inside it
   vec3 nn = normalize(mix(texelFetch(N0, tc(i), 0).xyz, texelFetch(N1, tc(i), 0).xyz, s));
@@ -330,7 +346,17 @@ export class GpuCloth {
     for (const [p, q, q2, t] of sewn) {
       const tp = texelOf.get(p), tq = texelOf.get(q), tq2 = texelOf.get(q2);
       if (tp === undefined || tq === undefined || tq2 === undefined || seam[tp * 4] >= 0) continue;
-      seam.set([tq, tq2, t, 1], tp * 4); follow(tq, tp, 1 - t); if (tq2 !== tq) follow(tq2, tp, t);
+      seam.set([tq, tq2, t, -1], tp * 4); follow(tq, tp, 1 - t); if (tq2 !== tq) follow(tq2, tp, t);
+    }
+    // (cloth on cloth: each jacket point's nearest breeches point at rest, within 6 cm: what it's kept outside of)
+    {
+      const under: { t: number; p: number[] }[] = [], over: { t: number; p: number[] }[] = [];
+      { let o2 = 0; for (const p of ps) { const S = cols(p); for (let r = 0; r < p.R; r++) for (let c = 0; c < S; c++) { const v = (p.base + r * p.J + c) * SKIN_STRIDE, e = { t: o2 + r * S + c, p: [V[v], V[v + 1], V[v + 2]] }; if (p.kind === 'breeches') under.push(e); else if (p.kind === 'jacket') over.push(e); } o2 += p.R * S; } }
+      if (under.length) for (const o of over) {
+        let best = -1, bd = 0.06 * 0.06;
+        for (const u of under) { const d = (u.p[0] - o.p[0]) ** 2 + (u.p[1] - o.p[1]) ** 2 + (u.p[2] - o.p[2]) ** 2; if (d < bd) { bd = d; best = u.t; } }
+        seam[o.t * 4 + 3] = best;
+      }
     }
     for (const [k, d] of Object.entries({ bind, bindN, jt, wt, metaA, metaB, rest0: rests[0], rest1: rests[1], rest2: rests[2], seam, seamB })) this.stat[k] = this.texture(d);
     const progs = { anchor: ANCHOR_FS, init: INIT_FS, predict: PREDICT_FS, solve: SOLVE_FS };

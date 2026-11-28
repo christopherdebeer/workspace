@@ -30,6 +30,25 @@ if (!process.env.CAPSULES) {
   B.dist = (p) => fieldTrunk.at(p).d; B.distAll = (p) => field.at(p).d;
   console.log(`the body's distance field: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 }
+// (the breeches it goes on over: their settled surface (static/piste/breeches-draft.json), each point's side out the body's
+// way, sampled once as a field of how far outside it a point is, over the hips; BREECHES=0: without them)
+let under = null;
+if (!process.env.CAPSULES && process.env.BREECHES !== '0') {
+  const bd = JSON.parse((await import('node:fs')).readFileSync(new URL('../static/piste/breeches-draft.json', import.meta.url), 'utf8'));
+  const bare2 = M.bareBody(f), pts = [], nrm = [];
+  for (let i = 0; i < bd.x.length / 3; i++) { const p = [bd.x[i * 3], bd.x[i * 3 + 1], bd.x[i * 3 + 2]]; if (p[1] < B.pelvis[1] + 0.15) { pts.push(p); nrm.push(M.nearSurface(bare2, p).normal); } }
+  const lo = [F.o[0] - 0.45, B.pelvis[1] - 0.45, -0.45], hi = [F.o[0] + 0.45, B.pelvis[1] + 0.2, 0.45], cell = 0.012;
+  const nx = Math.ceil((hi[0] - lo[0]) / cell) + 1, ny = Math.ceil((hi[1] - lo[1]) / cell) + 1, nz = Math.ceil((hi[2] - lo[2]) / cell) + 1, g = new Float32Array(nx * ny * nz * 4);
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const p = [lo[0] + i * cell, lo[1] + j * cell, lo[2] + k * cell]; let bi = -1, bdist = 0.05 * 0.05;
+    for (let t = 0; t < pts.length; t++) { const q = pts[t], dd = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2; if (dd < bdist) { bdist = dd; bi = t; } }
+    const o = ((k * ny + j) * nx + i) * 4;
+    if (bi < 0) { g[o] = 1; continue; }
+    const q = pts[bi], nn = nrm[bi]; g[o] = (p[0] - q[0]) * nn[0] + (p[1] - q[1]) * nn[1] + (p[2] - q[2]) * nn[2]; g[o + 1] = nn[0]; g[o + 2] = nn[1]; g[o + 3] = nn[2];
+  }
+  under = { at: (p) => { const i = Math.round((p[0] - lo[0]) / cell), j = Math.round((p[1] - lo[1]) / cell), k = Math.round((p[2] - lo[2]) / cell);
+    if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return { d: 1, n: [0, 1, 0] }; const o = ((k * ny + j) * nx + i) * 4; return { d: g[o], n: [g[o + 1], g[o + 2], g[o + 3]] }; } };
+}
 const P = M.draftJacket(B);
 if (process.env.OVERSIZE) { const k = Number(process.env.OVERSIZE); for (const qq of M.QUARTERS) P.widths[qq] = P.widths[qq].map((w) => w * k); for (const sd of ['W', 'R']) { P.sleeves[sd].round = P.sleeves[sd].round.map((x) => x * k); P.sleeves[sd].length *= 1.05; } for (const qq of M.QUARTERS) P.lengths[qq] += 0.08; P.shoulderW *= 1.1; }
 console.log('measured girths (cm), hem to shoulder:', P.stations.map((h) => (M.slice(B, B.pelvis[1] - 0.1 + h).girth * 100).toFixed(0)).join(' '));
@@ -55,7 +74,7 @@ for (let round = 1; round <= ROUNDS; round++) {
   // (long enough to finish: shorter, the solver's unfinished business reads as tightness)
   // (put on as Fab does: pinned, weightless while sewn, then let fall, in small steps: a third of the time, settled as
   // far; SETTLE=old: the long settle it replaced)
-  S = process.env.SETTLE !== 'old' ? M.settle(G, B.bodyCaps, { mode: 'fab', seconds: Number(process.env.SECS ?? 3), sleeveCaps: B.sleeveCaps, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined })
+  S = process.env.SETTLE !== 'old' ? M.settle(G, B.bodyCaps, { mode: 'fab', seconds: Number(process.env.SECS ?? 3), sleeveCaps: B.sleeveCaps, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined, under: under ?? undefined })
     : M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined });
   const X = (i) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
   const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);

@@ -217,7 +217,8 @@ void main(){
     float taut = smoothstep(1.0, 1.04, max(vStrain.x, vStrain.y));
     float crease = (ridge * ridge * (0.25 * patchy + 1.1 * bunchAlong) + ridge2 * ridge2 * 1.1 * bunchAcross) * 0.0016 * (1.0 - taut);
     patchy = clamp(0.25 * patchy + bunchAlong + bunchAcross, 0.0, 1.0) * (1.0 - taut);
-    float welt = 0.0007 * (1.0 - smoothstep(0.0, 0.006, seamD)) * (1.0 - 0.3 * step(0.6, fract(vT.y * 110.0)));
+    // (smooth: stitches stepped into it lit up, edge on, as a row of teeth; they show in its colour only)
+    float welt = 0.0007 * (1.0 - smoothstep(0.0, 0.006, seamD));
     N = bump(N, rib + slub + crease + welt);
     // (a crease's valley a little shut in, its ridge a little lit: the light alone doesn't make it read at a distance)
     alb *= 1.0 - 0.08 * patchy * (1.0 - ridge);

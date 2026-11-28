@@ -27,9 +27,11 @@ function fit(P) {
     for (let i = pc.base; i < pc.base + pc.rows * pc.cols; i++) if (inB(i)) off.push(field.at([S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]]).d);
     return [nm, { across: q(ac, 0.75), along: q(al, 0.75), ease: q(off, 0.5) }];
   })) }));
-  return { G, S, strain, panels, score: q(strain, 0.9) };
+  // (each seam's worst gap, settled)
+  const gaps = {}; for (const st of G.stitches) { const g = Math.hypot(...[0, 1, 2].map((k) => S.x[st.p * 3 + k] - (S.x[st.q * 3 + k] * (1 - st.t) + S.x[st.q2 * 3 + k] * st.t))); gaps[st.seam] = Math.max(gaps[st.seam] ?? 0, g); }
+  return { G, S, strain, panels, gaps, score: q(strain, 0.9) + 0.5 * Math.max(...Object.values(gaps)) };
 }
-const report = (r) => { console.log(`  stretch p50 ${pct(q(r.strain, 0.5))} p90 ${pct(q(r.strain, 0.9))} p99 ${pct(q(r.strain, 0.99))}`); for (const pn of r.panels) { console.log(`  ${pn.name}`); for (const [nm, b] of Object.entries(pn.bands)) console.log(`    ${nm.padEnd(7)} across ${pct(b.across).padStart(6)}  along ${pct(b.along).padStart(6)}  ease ${cm(b.ease).padStart(5)} cm`); } };
+const report = (r) => { console.log(`  stretch p50 ${pct(q(r.strain, 0.5))} p90 ${pct(q(r.strain, 0.9))} p99 ${pct(q(r.strain, 0.99))} · seams' worst gaps (cm): ${Object.entries(r.gaps).map(([k, v]) => `${k} ${cm(v)}`).join(', ')}`); for (const pn of r.panels) { console.log(`  ${pn.name}`); for (const [nm, b] of Object.entries(pn.bands)) console.log(`    ${nm.padEnd(7)} across ${pct(b.across).padStart(6)}  along ${pct(b.along).padStart(6)}  ease ${cm(b.ease).padStart(5)} cm`); } };
 // the fitting: the worst three alterations of different kinds each round, a round that makes it worse undone
 const ROUNDS = Number(process.argv[2] ?? 5);
 let best = { P: structuredClone(P), r: fit(P) }, damp = 0.7;
