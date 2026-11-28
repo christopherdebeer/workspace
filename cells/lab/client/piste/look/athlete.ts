@@ -850,7 +850,9 @@ function dressIn(m: SkinMesh, D: Draft, bind: Frame[], torsoWeights: (p: V) => W
       const part = pc.kind === 'jacket' ? PART.torso : pc.kind === 'sleeveR' ? PART.rearArm : row < 0.25 ? PART.torso : row < 0.4 ? PART.upperSleeve : PART.always;
       m.vert(p, norm(N[i]), [0.95, D.seam[i], TONE.jacket], MAT.fabric, [D.uv[i * 2], D.uv[i * 2 + 1]], w, [0, 0, 0, part]);
     }
+    // (the collar: an interfaced band, stiff: it goes with the body, not simulated)
     pieces.push({ kind: pc.kind, base: base + pc.base, R: pc.rows, J: pc.cols, closed: false, joint: pc.kind === 'jacket' ? undefined : elbowRow,
+      pins: pc.name === 'collar' ? Array.from({ length: pc.rows * pc.cols }, (_, k) => base + pc.base + k) : undefined,
       flat: Array.from({ length: pc.rows * pc.cols }, (_, k) => [D.flat[(pc.base + k) * 2], D.flat[(pc.base + k) * 2 + 1]] as [number, number]) });
   }
   for (const t of D.tris) index.push(base + t);

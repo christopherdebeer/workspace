@@ -337,17 +337,20 @@ export function meshJacket(P: JacketPattern, B: Body): Garment {
     const piece: Piece = { name: 'collar', rows: CR, cols: CC, flat: [], at: [], base: n, kind: 'collar' };
     // (where along the neckline a length falls: the two points it's between, and how far)
     const along = (want: number): [number, number, number] => { let k = 0; while (k < Ls.length - 2 && Ls[k + 1] < want) k++; return [loopIds[k], loopIds[k + 1], (want - Ls[k]) / Math.max(1e-9, Ls[k + 1] - Ls[k])]; };
-    const centre = add(B.pelvis, [0, B.shoulder[1] + 0.06 - B.pelvis[1], 0]);
+    // (round the neck: the middle of the two shoulder joints, which is on the trunk's axis)
+    const centre = scale(add(B.shoulder, B.rearShoulder), 0.5);
     for (let r = 0; r < CR; r++) for (let c = 0; c < CC; c++) {
       const want = (c / (CC - 1)) * neckLen, [qa, qb, t] = along(want), base0 = add(scale(atAll[qa], 1 - t), scale(atAll[qb], t));
       const toNeck = norm(sub([centre[0], base0[1], centre[2]], base0)), u = r / (CR - 1);
       // (the band a little shorter at its top edge, so it stands in close round the neck)
       piece.flat.push([want * (1 - 0.03 * u), u * HIGH]);
-      piece.at.push(madd(madd(base0, [0, 1, 0], u * HIGH), toNeck, u * 0.012));
+      piece.at.push(madd(madd(base0, [0, 1, 0], u * HIGH), toNeck, u * 0.005));
     }
     pieces.push(piece); flatAll.push(...piece.flat); atAll.push(...piece.at);
     for (let c = 0; c < CC; c++) { const [qa, qb, t] = along((c / (CC - 1)) * neckLen); stitches.push({ p: n + c, q: qa, q2: qb, t, seam: 'collar' }); }
     for (let r = 1; r < CR; r++) pair(n + r * CC + CC - 1, n + r * CC, 'collar fastening');
+    // (interfaced, it stands: held where it's laid above its seam)
+    for (let r = 1; r < CR; r++) for (let c = 0; c < CC - 1; c++) pins.push({ p: n + r * CC + c, at: piece.at[r * CC + c] });
     n += CR * CC;
   }
   // the crotch strap: the centre front's hem to the centre back's, under the crotch (a little below the hem between the

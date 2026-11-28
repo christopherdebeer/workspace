@@ -71,7 +71,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     continue;
   }
   best = { score, P: structuredClone(P), G, S };
-  console.log(`\n── round ${round} (${((Date.now() - t0) / 1000).toFixed(1)} s) ──  stretch p50 ${pct(q(strain, 0.5))} p90 ${pct(q(strain, 0.9))} p99 ${pct(q(strain, 0.99))} · seams: worst gap ${cm(Math.max(...gaps))} cm, p90 ${cm(q(gaps, 0.9))} · inside the body: ${off.filter((d) => d < -0.002).length} points`);
+  console.log(`\n── round ${round} (${((Date.now() - t0) / 1000).toFixed(1)} s) ──  stretch p50 ${pct(q(strain, 0.5))} p90 ${pct(q(strain, 0.9))} p99 ${pct(q(strain, 0.99))} · seams: worst gap ${cm(Math.max(...gaps))} cm (${G.stitches[gaps.indexOf(Math.max(...gaps))].seam}), p90 ${cm(q(gaps, 0.9))} · inside the body: ${off.filter((d) => d < -0.002).length} points`);
   // by piece and band: across and along stretch, and the ease
   const moves = [], upper = [], candidates = [];
   const propose = (sev, family, key, apply) => candidates.push({ sev, family, key, apply });
