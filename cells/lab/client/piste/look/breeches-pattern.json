@@ -11,13 +11,13 @@
   "band": 0.3533395311462493
  },
  "ease": {
-  "waist": 0.142,
+  "waist": 0.03,
   "hips": 0.1,
   "thigh": 0.1,
-  "knee": 0.07786140188588572,
-  "band": 0.08299999999999999
+  "knee": 0.06,
+  "band": 0.02
  },
- "kneeBend": 0.20770692286938983,
+ "kneeBend": 0.1,
  "backShare": 0.56,
  "forkFront": 0.04610480117968566,
  "forkBack": 0.09220960235937133,
@@ -40,18 +40,6 @@
   }
  },
  "moves": [
-  "drafted from the body",
-  "fronts more bent over the knee",
-  "waist let out 2.8 cm",
-  "band let out",
-  "fronts more bent over the knee",
-  "waist let out 2.8 cm",
-  "band let out",
-  "fronts more bent over the knee",
-  "waist let out 2.8 cm",
-  "band let out",
-  "fronts more bent over the knee",
-  "waist let out 2.8 cm",
-  "let out above the knee"
+  "drafted from the body"
  ]
 }

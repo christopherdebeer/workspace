@@ -39,9 +39,12 @@ for (let round = 1; round <= ROUNDS; round++) {
   const props = [];
   const front = (n) => n.endsWith('front');
   const w = worst('waist', 'across'); if (w > 0.02) props.push([w, `waist let out ${cm(Math.min(0.04, w * 0.9) * damp)} cm`, () => { Pn.ease.waist += Math.min(0.04, w * 0.9) * damp; }]);
-  const kb = Math.max(worst('knee', 'along', front), worst('band', 'along', front)); if (kb > 0.03) props.push([kb, `fronts more bent over the knee`, () => { Pn.kneeBend += Math.min(0.04, kb * 0.25) * damp; }]);
-  const bl = Math.min(...r.panels.map((pn) => pn.bands.band.along)); if (bl > 0.03) props.push([bl, `inside leg lengthened`, () => { Pn.inseam += Math.min(0.03, bl * Pn.inseam * 0.4) * damp; }]);
-  const ba = worst('band', 'across'); if (ba > 0.03) props.push([ba, `band let out`, () => { Pn.ease.band += Math.min(0.03, ba * 0.4) * damp; }]);
+  // (the knee's extra length no more than 12 cm: more only bunches over the band; the band's pull over the kneecap
+  // isn't for want of length)
+  const kb = Math.max(worst('knee', 'along', front), worst('band', 'along', front)); if (kb > 0.03 && Pn.kneeBend < 0.12) props.push([kb, `fronts more bent over the knee`, () => { Pn.kneeBend = Math.min(0.12, Pn.kneeBend + Math.min(0.04, kb * 0.25) * damp); }]);
+  // (no lengthening the leg or letting out the band for the pull at the band: it's the band drawn round below a bent knee,
+  // and more cloth only bunches over it and hangs down, plus-fours)
+
   const ka = worst('knee', 'across'); if (ka > 0.03) props.push([ka, `let out above the knee`, () => { Pn.ease.knee += Math.min(0.04, ka * 0.4) * damp; }]);
   const cr = worst('crotch', 'along'); if (cr > 0.03) props.push([cr, `rise lengthened`, () => { Pn.riseBack += Math.min(0.03, cr * 0.2) * damp; Pn.riseFront += Math.min(0.02, cr * 0.12) * damp; }]);
   props.sort((a, b) => b[0] - a[0]);

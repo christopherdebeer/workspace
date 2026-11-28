@@ -152,7 +152,11 @@ export function meshBreeches(P: BreechesPattern, f: Fencer, body: Bare, base = 0
         // needs; nothing at the seams, so they stay the same length)
         // (the extra length over the kneecap only, taken back in below it: the hem straight into the band)
         const kneeU = (legLen - 0.07) / legLen, bendK = above ? 0 : smoothstep((u - (kneeU - 0.2)) / 0.16) * (1 - smoothstep((u - (kneeU + 0.01)) / (1 - kneeU - 0.01))) * Math.sin(Math.PI * cf) ** 2;
-        const y = above ? u * yRise : yRise + u * legLen + bendK * P.kneeBend * (back ? -0.4 : 1);
+        // (the crotch's line level across the panel: the centre's longer rise is its waist raised above the side's, not the
+        // crotch lowered: lowered, every row below it down to the band hung that much longer at the inside, and the band,
+        // fastened level round the leg, had a flap behind the knee)
+        const crotchY = Math.max(P.riseFront, P.riseBack);
+        const y = above ? crotchY - (1 - u) * yRise : crotchY + u * legLen + bendK * P.kneeBend * (back ? -0.4 : 1);
         piece.flat.push([-(1 - cf) * width, y]);
         // laid: above the crotch round the hips, from the centre to the side; below round the thigh, from its inside
         // round its front (or back) to its outside
