@@ -53,7 +53,10 @@ for (let round = 1; round <= ROUNDS; round++) {
   const t0 = Date.now();
   G = M.meshJacket(P, B);
   // (long enough to finish: shorter, the solver's unfinished business reads as tightness)
-  S = M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined });
+  // (put on as Fab does: pinned, weightless while sewn, then let fall, in small steps: a third of the time, settled as
+  // far; SETTLE=old: the long settle it replaced)
+  S = process.env.SETTLE !== 'old' ? M.settle(G, B.bodyCaps, { mode: 'fab', seconds: Number(process.env.SECS ?? 3), sleeveCaps: B.sleeveCaps, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined })
+    : M.settle(G, B.bodyCaps, { seconds: 8, sleeveCaps: B.sleeveCaps, passes: 16, body: field ?? undefined, trunkBody: fieldTrunk ?? undefined });
   const X = (i) => [S.x[i * 3], S.x[i * 3 + 1], S.x[i * 3 + 2]];
   const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
   const isSl = (i) => G.pieces.some((pc) => pc.kind !== 'body' && i >= pc.base && i < pc.base + pc.rows * pc.cols);

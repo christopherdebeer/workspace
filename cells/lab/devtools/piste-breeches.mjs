@@ -18,7 +18,7 @@ const q = (a, t) => { const s2 = [...a].sort((x, y) => x - y); return s2.length 
 const BANDS = [['waist', 0, 2], ['hips', 3, 7], ['crotch', 8, 12], ['thigh', 13, 19], ['knee', 20, 26], ['band', 27, 29]];
 /** sewn, settled on the body, measured: each panel's bands, across and along (75th percentile) and ease */
 function fit(P) {
-  const G = M.meshBreeches(P, f, bare), S = M.settle(G, [], { seconds: 8, passes: 16, body: field });
+  const G = M.meshBreeches(P, f, bare), S = process.env.SETTLE !== 'old' ? M.settle(G, [], { mode: 'fab', seconds: 3, body: field }) : M.settle(G, [], { seconds: 8, passes: 16, body: field });
   const strain = S.edges.map((e) => Math.hypot(...[0, 1, 2].map((k) => S.x[e.a * 3 + k] - S.x[e.b * 3 + k])) / e.rest - 1);
   const panels = G.pieces.map((pc, pi) => ({ name: pc.name, bands: Object.fromEntries(BANDS.map(([nm, r0, r1]) => {
     const inB = (i) => { const r = Math.floor((i - pc.base) / pc.cols); return r >= r0 && r <= r1; };

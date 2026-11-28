@@ -14,7 +14,10 @@ import { FABRIC } from './cloth';
 
 export interface Settled { x: Float64Array; edges: { a: number; b: number; rest: number; dir: 'across' | 'along' | 'diag' | 'bend'; piece: number }[] }
 
-export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number; gravity?: number; free?: boolean; body?: { at: (p: V) => { d: number; n: V } }; trunkBody?: { at: (p: V) => { d: number; n: V } } } = {}): Settled {
+export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick?: number; sleeveCaps?: Capsule[]; passes?: number; gravity?: number; free?: boolean; body?: { at: (p: V) => { d: number; n: V } }; trunkBody?: { at: (p: V) => { d: number; n: V } };
+  /** 'fab': put on as Fab does (client/fab/cloth.ts): pinned where it's laid, weightless, while the seams are drawn shut,
+   * then the pins out and it falls into its drape; in small steps */
+  mode?: 'fab' } = {}): Settled {
   const n = G.n, x = new Float64Array(n * 3), prev = new Float64Array(n * 3);
   G.at.forEach((p, i) => { x.set(p, i * 3); prev.set(p, i * 3); });
   const edges: Settled['edges'] = [];
@@ -30,15 +33,22 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
   // (the kit's fabric (cloth.ts): bending as the cube of its bending length, from the 0.12 it was set at for a 3 cm cloth)
   const k = { across: 1, along: 1, diag: 0.5, bend: 0.12 * (FABRIC.bendingLength / 0.03) ** 3 };
   const STEP = 0.005;
-  const h = 1 / 240, steps = Math.round((o.seconds ?? 6) / h), thick = o.thick ?? 0.004;
+  const fab = o.mode === 'fab';
+  const h = fab ? 1 / 960 : 1 / 240, steps = Math.round((o.seconds ?? (fab ? 3 : 6)) / h), thick = o.thick ?? 0.004;
+  // (Fab's pins: a few inside each piece, clear of its edges, held where it was laid while the seams close (1.1 s), then
+  // out over half a second; pinned, the cloth is weightless)
+  const pinIds: number[] = [];
+  if (fab && !o.free) for (const pc of G.pieces) for (const v of [0.3, 0.55, 0.8]) for (const u of [0.3, 0.5, 0.7]) { const i = pc.base + Math.round(v * (pc.rows - 1)) * pc.cols + Math.round(u * (pc.cols - 1)); if (!pinIds.includes(i)) pinIds.push(i); }
+  const pinAt = pinIds.map((i) => G.at[i]);
+  const pinned = (t: number) => { const u = (t - 1.1) / 0.5; return u <= 0 ? 1 : u >= 1 ? 0 : 1 - u * u * (3 - 2 * u); };
   const P = (i: number): V => [x[i * 3], x[i * 3 + 1], x[i * 3 + 2]];
   for (let s = 0; s < steps; s++) {
     // (the seams drawn closed gently, over two and a half seconds: pulled shut at once they fling the cloth)
-    const seam = Math.min(1, (s * h) / 2.5);
+    const seam = Math.min(1, (s * h) / (fab ? 0.8 : 2.5)), pw = fab ? pinned(s * h) : 0;
     // inertia and gravity (damped hard: it's settling, not moving)
     for (let i = 0; i < n; i++) for (let a = 0; a < 3; a++) {
-      const j = i * 3 + a, v = (x[j] - prev[j]) * 0.9;
-      prev[j] = x[j]; x[j] += v + (a === 1 ? -(o.gravity ?? 9.81) * h * h : 0);
+      const j = i * 3 + a, v = (x[j] - prev[j]) * (fab ? 0.985 : 0.9);
+      prev[j] = x[j]; x[j] += v + (a === 1 ? -(o.gravity ?? 9.81) * h * h * (1 - pw) : 0);
     }
     // (no point moves more than 5 mm a step, from where it was: much less than the thinnest part of the body, so the
     // cloth can't pass through it between one step and the next)
@@ -47,7 +57,7 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
       if (d > STEP) { const m = STEP / d; x[j] = prev[j] + dx * m; x[j + 1] = prev[j + 1] + dy * m; x[j + 2] = prev[j + 2] + dz * m; }
     }
     // (passes enough for stiff cloth to come to its lengths: off line, there's time)
-    for (let it = 0; it < (o.passes ?? 10); it++) {
+    for (let it = 0; it < (fab ? 3 : (o.passes ?? 10)); it++) {
       for (const e of edges) {
         const a = e.a * 3, b = e.b * 3, dx = x[b] - x[a], dy = x[b + 1] - x[a + 1], dz = x[b + 2] - x[a + 2], l = Math.hypot(dx, dy, dz);
         if (l < 1e-9) continue;
@@ -67,6 +77,7 @@ export function settle(G: Garment, caps: Capsule[], o: { seconds?: number; thick
         if (l > tie.len) { const m = tie.len / l; x[a] = tie.at[0] + dx * m; x[a + 1] = tie.at[1] + dy * m; x[a + 2] = tie.at[2] + dz * m; }
       }
       if (!o.free) for (const pn of G.pins ?? []) x.set(pn.at, pn.p * 3);
+      if (pw > 0) pinIds.forEach((i, k) => { for (let a = 0; a < 3; a++) x[i * 3 + a] += (pinAt[k][a] - x[i * 3 + a]) * 0.6 * pw; });
       // the body (look/body.ts): out of it, a little off it, the friction as below (the jacket's body out of the trunk
       // and thighs: an arm by the side is in its sleeve, outside the body of the jacket)
       if (o.body) { for (let i = 0; i < n; i++) {
